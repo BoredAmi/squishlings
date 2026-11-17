@@ -1,0 +1,20 @@
+# Evolve soft voxel crawlers: bodies of up to 40 one-centimetre voxels of Ecoflex 00-30 (a), Dragon Skin 10 (b) and
+# four muscle groups (1-4) that grow in a 6 x 6 x 4 box; each creature runs 3 s on MuJoCo (0.3 s settling, then 2.7 s
+# of gait) and scores the distance its centre of mass travels. One cube per voxel: fast (~10 s a creature) but its
+# distances run ~2-3x high on thin limbs, so use it to explore and crawler_fine.yaml to rank (README).
+#   squishlings evolve jobs/crawler.yaml --jobs 6
+#   squishlings replay runs/crawler --best 3 --gif crawlers.gif --html crawlers.html
+scenario: ../squishlings/creatures/base.yaml
+backend: mujoco
+genome:
+  shape: [6, 6, 4]
+  voxel: 10 mm
+  tissues: [ecoflex_00_30, dragon_skin_10]
+  muscle: {material: ecoflex_00_30, groups: 4, frequency: [1 Hz, 12 Hz], amplitude: [5 kPa, 40 kPa], start: 0.3 s}
+  min_cells: 6
+  max_cells: 40
+  fill: 0.3
+evolution: {population: 24, offspring: 24, generations: 30, tournament: 3, crossover: 0.5, seed: 0}
+fitness: {metric: distance, size_penalty: 0}
+seeds: [../squishlings/creatures/inchworm.yaml, ../squishlings/creatures/quad.yaml]
+output: ../runs/crawler

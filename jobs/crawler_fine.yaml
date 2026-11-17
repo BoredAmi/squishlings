@@ -1,0 +1,13 @@
+# The recommended setting: each voxel split into 2^3 cubes (48 tets), ~8x the cost of crawler.yaml but its distances
+# shrink only 13-26% one level finer (against 45-80% for one cube per voxel), so its rankings hold (README). Seeded
+# with the packaged champions; ~4 min a generation on 6 laptop cores.
+#   squishlings evolve jobs/crawler_fine.yaml --jobs 6
+#   squishlings evolve jobs/crawler_fine.yaml --check 3     # exploit check of the 3 best
+extends: crawler.yaml
+genome: {subdivide: 2}
+evolution: {population: 16, offspring: 16, generations: 12, seed: 1}
+seeds:
+  - ../squishlings/creatures/champion_1.yaml
+  - ../squishlings/creatures/champion_2.yaml
+  - ../squishlings/creatures/champion_3.yaml
+output: ../runs/crawler_fine

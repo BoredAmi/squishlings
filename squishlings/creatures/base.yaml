@@ -1,0 +1,24 @@
+# Base scenario of the soft creatures (squishlings README): a free voxel body on a frictional ground. `squishlings evolve`
+# replaces the body's geometry, material, zones and actuators by each creature's; the rest (time step, duration,
+# ground, settle time) is shared by every creature of a run. Tissues and muscles must share one elastic law and
+# damping on MuJoCo (one flex per body): Ecoflex 00-30 and Dragon Skin 10 are both stable neo-Hookean.
+#   softsim run base.yaml     # a single resting voxel
+scenario: locomotion
+description: Soft voxel creature on a frictional ground (base of the evolution jobs).
+backend: mujoco
+settle: 0.3 s
+
+simulation:
+  timestep: 1 ms
+  duration: 3 s
+  output_rate: 100 Hz
+
+ground:
+  friction: {sliding: 1.0}   # = the silicone cards' own; MuJoCo uses the larger of the two
+
+body:
+  name: creature
+  geometry: {type: voxels, voxel: 10 mm, cells: [["a"]]}
+  material: ecoflex_00_30
+
+actuators: []

@@ -1,0 +1,92 @@
+# Champion 1 of the first squishlings run (jobs/crawler_fine.yaml, 2026-11-17): evolved on 2^3 cubes per voxel,
+# 683 mm in 2.7 s of gait as evolved, 569 mm one mesh level finer (3^3): distances rank creatures, they are
+# not converged speeds (README). Run it:  softsim run champion_1.yaml
+scenario: locomotion
+description: Evolved creature a554fe6cb0587353 (rank 0, distance 0.6833) from evolve_crawler_fine.yaml
+backend: mujoco
+settle: 0.3 s
+simulation:
+  timestep: 1 ms
+  duration: 3 s
+  output_rate: 100 Hz
+ground:
+  friction:
+    sliding: 1.0
+body:
+  name: creature
+  geometry:
+    type: voxels
+    voxel: 0.01
+    cells:
+    - - 1.....
+      - 4422..
+      - 3b....
+      - 2.....
+    - - ..aa3.
+      - ..2a.b
+      - '...2..'
+      - '......'
+    - - ..a2..
+      - '...313'
+      - '......'
+      - '......'
+    - - ..a...
+      - '....ba'
+      - '....1.'
+      - '......'
+    subdivide: 2
+  material:
+    preset: ecoflex_00_30
+    friction:
+      sliding: 1.0
+  zones:
+  - name: tissue_b
+    material:
+      preset: dragon_skin_10
+      friction:
+        sliding: 1.0
+    region: b
+actuators:
+- name: muscle_1
+  type: muscle
+  region: '1'
+  direction:
+  - 0.0
+  - 1.0
+  - 0.0
+  oscillator:
+    frequency: 12.0
+    amplitude: 40000.0
+    phase: 0.18520827694681813
+    start: 0.3
+- name: muscle_2
+  type: muscle
+  region: '2'
+  direction: &id001
+  - 1.0
+  - 0.0
+  - 0.0
+  oscillator:
+    frequency: 12.0
+    amplitude: 40000.0
+    phase: 5.9744281854521875
+    start: 0.3
+- name: muscle_3
+  type: muscle
+  region: '3'
+  direction: isotropic
+  oscillator:
+    frequency: 12.0
+    amplitude: 40000.0
+    phase: 2.57353096556789
+    start: 0.3
+- name: muscle_4
+  type: muscle
+  region: '4'
+  direction: *id001
+  oscillator:
+    frequency: 12.0
+    amplitude: 40000.0
+    phase: 4.928572125517734
+    start: 0.3
+name: creature_a554fe6cb0587353

@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "squishlings"
+version = "0.1.0.dev0"
+description = "Evolve soft voxel creatures that crawl, built on softsim's calibrated silicone materials and MuJoCo flex physics."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "BoredAmi" }]
+keywords = ["artificial life", "evolutionary robotics", "soft robotics", "virtual creatures", "MuJoCo"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Artificial Life",
+]
+dependencies = [
+    "softsim[mujoco]>=0.2.0",   # voxel bodies and muscle actuators arrive in softsim 0.2.0
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+    "pillow>=9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "ruff>=0.5"]
+
+[project.scripts]
+squishlings = "squishlings.cli:main"
+
+# softsim finds the scenario through this entry point: `scenario: locomotion` in any softsim config
+[project.entry-points."softsim.scenarios"]
+locomotion = "squishlings.locomotion:LocomotionScenario"
+
+[tool.setuptools.packages.find]
+include = ["squishlings*"]
+
+[tool.setuptools.package-data]
+squishlings = ["creatures/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:launch_testing -p no:launch_ros"
+
+[tool.ruff]
+line-length = 120
+extend-exclude = ["runs"]
+
+[tool.ruff.lint]
+# errors only, as in softsim: syntax, undefined names, unused imports/variables
+select = ["E9", "E7", "F", "I"]
+ignore = ["E731", "E741"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["squishlings"]
+known-third-party = ["softsim"]

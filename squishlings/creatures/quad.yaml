@@ -1,0 +1,20 @@
+# Quadruped: a 4 x 4 cm Ecoflex torso (a) on four 1 cm legs of vertical muscle; diagonal legs share a group (1: front
+# left + rear right, 2: the other pair), a quarter period apart, a trot-like gait. A hand-made seed for
+# `squishlings evolve` and a regression test.
+#   softsim run quad.yaml
+extends: base.yaml
+description: Four-legged trotter (two diagonal muscle groups, 10 Hz, 40 kPa).
+body:
+  name: creature
+  geometry:
+    type: voxels
+    voxel: 10 mm
+    cells:
+      - ["1..2", "....", "....", "2..1"]
+      - ["aaaa", "aaaa", "aaaa", "aaaa"]
+  material: ecoflex_00_30
+actuators:
+  - {name: muscle_1, type: muscle, region: "1", direction: [0, 0, 1],
+     oscillator: {frequency: 10 Hz, amplitude: 40 kPa, phase: 0 rad, start: 0.3 s}}
+  - {name: muscle_2, type: muscle, region: "2", direction: [0, 0, 1],
+     oscillator: {frequency: 10 Hz, amplitude: 40 kPa, phase: 1.5708 rad, start: 0.3 s}}

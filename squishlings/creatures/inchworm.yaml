@@ -1,0 +1,21 @@
+# Inchworm: a 6 x 2 x 1 strip (1 cm voxels) of two muscle groups, rear (1) and front (2), contracting along x half a
+# period apart, with a stiff Dragon Skin foot (b) at the rear and soft Ecoflex (a) at the front: the unequal ends
+# break the symmetry so the strip creeps. A hand-made seed for `squishlings evolve` and a regression test.
+#   softsim run inchworm.yaml
+extends: base.yaml
+description: Two-muscle inchworm (antiphase, 10 Hz, 40 kPa).
+body:
+  name: creature
+  geometry:
+    type: voxels
+    voxel: 10 mm
+    cells:
+      - ["b1122a", "b1122a"]
+  material: ecoflex_00_30
+  zones:
+    - {name: tissue_b, material: dragon_skin_10, region: b}
+actuators:
+  - {name: muscle_1, type: muscle, region: "1", direction: [1, 0, 0],
+     oscillator: {frequency: 10 Hz, amplitude: 40 kPa, phase: 0 rad, start: 0.3 s}}
+  - {name: muscle_2, type: muscle, region: "2", direction: [1, 0, 0],
+     oscillator: {frequency: 10 Hz, amplitude: 40 kPa, phase: 3.14159 rad, start: 0.3 s}}
