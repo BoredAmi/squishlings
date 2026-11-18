@@ -16,7 +16,7 @@ reds and oranges: the four muscle groups. Each travels 0.5-0.6 m in 2.7 s.*
 ```bash
 pip install -e .                                   # needs softsim >= 0.2.0 (voxel bodies and muscles)
 squishlings creatures                              # the packaged seeds and champions
-softsim run squishlings/creatures/champion_1.yaml  # run one; any softsim command works on a creature
+softsim run sq  uishlings/creatures/champion_1.yaml  # run one; any softsim command works on a creature
 squishlings evolve jobs/crawler_fine.yaml --jobs 6                    # evolve (~4 min a generation, resumable)
 squishlings evolve jobs/crawler_fine.yaml --check 3                   # exploit check of the 3 best
 squishlings replay runs/crawler_fine --best 3 --gif crawlers.gif --html crawlers.html
@@ -71,6 +71,66 @@ Also: on MuJoCo every run prints "Flex stiffness is too ill-conditioned" and "In
 singular" warnings, nearly all on the first time step, where the solver starts from rest with nothing to warm-start
 from. They do not affect the results (no run failed, replays reproduce the evolved distances exactly).
 
+## Soft sticks (prototype)
+
+A second body encoding, closer to Framsticks: the body is a tree of soft capsules joined end to end, written as
+indented text. This champion has a torso, two mirrored leg pairs, and a tail:
+
+```text
+seg len=29.5 r=6 mat=a muscle=2 bend
+  seg len=14 r=5.4 mat=a yaw=-60 pitch=-40 muscle=1 bend roll=90 sym
+    seg len=9 r=3 mat=b pitch=-13
+  seg len=20 r=5.5 mat=a yaw=-180 pitch=-20 muscle=2
+    seg len=12.4 r=4 mat=a yaw=-60 pitch=-40 muscle=1 sym
+      seg len=9 r=3 mat=b pitch=-30
+---
+freq=6.95 amp=15000 phases=1.500,4.843,3.964,6.030
+```
+
+![The three best soft-stick creatures, crawling](docs/media/sticks.gif)
+
+*The three best creatures of the first soft-stick run. Reds and oranges: Ecoflex 00-30 muscles (every Ecoflex
+segment of these champions evolved into one; the two halves of a bending muscle are lighter and darker), blue:
+passive Dragon Skin 10 feet. Each travels 360-390 mm in 2.7 s.*
+
+How the encoding works:
+
+- **Segments:** each segment has a length, a radius, a tissue and a direction relative to its parent (`yaw`,
+  `pitch`). It can also have a muscle group, which either contracts along its axis or, with `bend`, is split
+  lengthwise into two halves driven in antiphase so it curls (`roll` sets the bend plane). `sym` adds a mirrored
+  copy of the subtree. A body has at most 10 segments.
+- **Mesh:** gmsh fuses the cylinders and the joint spheres into one solid, trims it flat 1.5 mm above its lowest
+  point (round bodies roll over otherwise), and meshes it at 3 mm. Each tet is labelled by the capsule it lies in,
+  and the result is a softsim `mesh_file` body.
+- **Evolution:** (μ+λ) as for voxels. Mutation steps a number, adds, deletes or copies a subtree, or toggles a
+  muscle, `bend` or `sym`. Crossover swaps subtrees. The text is the genome, so a language model can edit it
+  directly; that is the next step.
+
+```bash
+python -m squishlings.sticks_evolve --generations 20 --population 16 --offspring 16 --jobs 8 --duration 3 \
+    --out runs/sticks_long --seeds squishlings/creatures/sticks/champion_1.txt
+python spikes/sticks_check.py runs/sticks_long --top 3            # exploit check
+```
+
+**First run** (2026-11-18, 20 generations, 336 creatures, 5.7 h on 8 laptop cores, no failures): the best distance
+rose from 33 mm to 393 mm in 2.7 s of gait. Exploit check of the top 3:
+
+| Creature | Distance as evolved | Mesh 3 → 2 mm | Time step / 2 | Friction ×0.8 | Friction ×1.2 |
+| --- | --- | --- | --- | --- | --- |
+| `champion_1` | 393 mm | +2% | +4% | −16% | +6% |
+| `champion_2` | 391 mm | +10% | −2% | −16% | +12% |
+| `champion_3` | 362 mm | +11% | −1% | −16% | +14% |
+
+- **The mesh matters much less than for voxels:** +2% to +11% one step finer, against −13% to −26% for 2³ voxels.
+  The step is smaller, though (1.7× the tets, against 3.4×), and the distances still grow, so the coarse mesh is
+  slightly too stiff. Creatures within about 10% of each other do not rank reliably.
+- **These gaits crawl rather than hop,** so friction matters more than it does for the voxel gaits.
+- **Voxels still go further:** 400-430 mm for sticks against 569-585 mm for voxels, both on the finer mesh. The
+  voxels had 42 generations and muscles up to 40 kPa, and the stick champion sits at its 15 kPa limit.
+
+The design, the problems found while building it, and the results are in
+[docs/design/soft-sticks.md](docs/design/soft-sticks.md).
+
 ## Files
 
 | | |
@@ -82,6 +142,11 @@ from. They do not affect the results (no run failed, replays reproduce the evolv
 | `squishlings/replay.py` | GIF and HTML replays |
 | `squishlings/creatures/` | `base.yaml` (shared settings), seeds (`inchworm`, `quad`), the first run's champions |
 | `jobs/` | `crawler.yaml` (fast, exploratory), `crawler_fine.yaml` (recommended) |
+| `squishlings/sticks.py` | soft sticks: the text genome and its operators |
+| `squishlings/sticks_mesh.py` | soft sticks → gmsh mesh with muscle regions → softsim scenario |
+| `squishlings/sticks_evolve.py` | the soft-stick evolution loop (prototype, not yet behind `squishlings evolve`) |
+| `squishlings/creatures/sticks/` | the first soft-stick run's champions |
+| `spikes/` | the soft-stick feasibility spike and exploit check |
 
 ## Ideas
 

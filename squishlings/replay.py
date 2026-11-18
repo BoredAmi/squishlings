@@ -31,13 +31,17 @@ def label_colour(label: str) -> tuple[float, float, float]:
         return _TISSUE_RGB[TISSUE_CHARS.index(label)]
     if label in MUSCLE_CHARS:
         return _MUSCLE_RGB[MUSCLE_CHARS.index(label)]
+    if label[:1] == "m" and label[1:].rstrip("ef").isdigit():  # soft-stick muscle: segment i, bend halves e/f
+        rgb = _MUSCLE_RGB[int(label[1:].rstrip("ef")) % len(_MUSCLE_RGB)]
+        return tuple(0.8 * v for v in rgb) if label.endswith("f") else rgb
     return (0.7, 0.7, 0.7)
 
 
 def _triangle_labels(mesh, volumes: dict[str, np.ndarray], tris: np.ndarray) -> list[str]:
     """Label of the tet each boundary triangle belongs to."""
     tet_label = np.full(mesh.n_tets, "", dtype=object)
-    for lab, elements in volumes.items():
+    # largest first, so a region covering everything (a mesh_file's ``body``) never hides the zones inside it
+    for lab, elements in sorted(volumes.items(), key=lambda kv: -len(kv[1])):
         tet_label[np.asarray(elements)] = lab
     owner = {}
     for e, tet in enumerate(mesh.tets):

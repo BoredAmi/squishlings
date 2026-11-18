@@ -39,7 +39,7 @@ locomotion = "squishlings.locomotion:LocomotionScenario"
 include = ["squishlings*"]
 
 [tool.setuptools.package-data]
-squishlings = ["creatures/*.yaml"]
+squishlings = ["creatures/*.yaml", "creatures/sticks/*.txt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

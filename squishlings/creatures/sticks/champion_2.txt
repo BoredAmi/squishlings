@@ -1,0 +1,9 @@
+# distance 390.8 mm, key ea80661983e29144
+seg len=29.5 r=6 mat=a muscle=2 bend
+  seg len=14 r=5.6 mat=a yaw=-60 pitch=-40 muscle=1 bend roll=90 sym
+    seg len=10.6 r=3 mat=b pitch=-13
+  seg len=20 r=5.5 mat=a yaw=-180 pitch=-20 muscle=2
+    seg len=12.9 r=4 mat=a yaw=-60 pitch=-40 muscle=1 sym
+      seg len=9 r=3 mat=b pitch=-30
+---
+freq=6.74 amp=14740 phases=2.012,4.854,4.880,0.689
