@@ -159,22 +159,72 @@ def scenario(g: StickGenome, msh: Path, segs: list[Placed], regions: set[str], b
     return raw
 
 
-def main(argv: list[str] | None = None) -> int:
-    """``python -m squishlings.sticks_mesh genome.txt out.msh [size]``: mesh in a separate process, so the caller
-    can kill a gmsh that hangs. Prints the regions' tet counts as JSON."""
+def space_from_dict(d: dict) -> "StickSpace":
+    from squishlings.sticks import StickSpace
+
+    return StickSpace(**{k: tuple(v) if isinstance(v, list) else v for k, v in d.items()})
+
+
+def run_sticks(task: dict[str, Any]) -> dict[str, Any]:
+    """Worker of ``squishlings evolve`` for ``encoding: sticks``: mesh the creature in a child process (killed
+    after ``task["timeout"]`` s: gmsh can hang on awkward overlaps; a mesh already on disk is reused), then
+    simulate it. Returns the scenario summary plus ``tets``, or ``{"error": ...}``."""
     import json
+    import subprocess
     import sys
+
+    from squishlings._jobs import run_summary
+    from squishlings.sticks import from_text
+
+    g = from_text(task["text"], space_from_dict(task["space"]))
+    msh = Path(task["mesh"])
+    msh.parent.mkdir(parents=True, exist_ok=True)
+    regions = msh.with_suffix(".regions.json")
+    if not (regions.is_file() and msh.is_file()):
+        txt = msh.with_suffix(".txt")
+        txt.write_text(g.text)
+        try:
+            p = subprocess.run([sys.executable, "-m", "squishlings.sticks_mesh", str(txt), str(msh),
+                                str(task["mesh_size"]), "--space", json.dumps(task["space"])],
+                               capture_output=True, text=True, timeout=task["timeout"])
+        except subprocess.TimeoutExpired:
+            return {"error": f"mesh: gmsh timed out after {task['timeout']:g} s"}
+        lines = p.stdout.strip().splitlines()
+        out = json.loads(lines[-1]) if lines and lines[-1].startswith("{") else {"error": p.stderr[-300:]}
+        if "tets" not in out:
+            return {"error": f"mesh: {out.get('error', 'unknown')}"}
+        regions.write_text(json.dumps(out["tets"]))
+    tets = json.loads(regions.read_text())
+    raw = scenario(g, msh, place(g), set(tets), task["base"], task["tissues"], task["start"])
+    raw["name"] = task["name"]
+    summary = run_summary((raw, task["base_dir"]))
+    if "error" not in summary:
+        summary["tets"] = float(sum(tets.values()))
+    return summary
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m squishlings.sticks_mesh genome.txt out.msh [size] [--space JSON]``: mesh in a separate
+    process, so the caller can kill a gmsh that hangs. Prints the regions' tet counts as JSON."""
+    import argparse
+    import json
 
     from squishlings.sticks import StickSpace, from_text
 
-    args = sys.argv[1:] if argv is None else argv
-    g = from_text(Path(args[0]).read_text(), StickSpace())
+    ap = argparse.ArgumentParser()
+    ap.add_argument("genome")
+    ap.add_argument("msh")
+    ap.add_argument("size", type=float, nargs="?", default=3.0)
+    ap.add_argument("--space", help="the StickSpace as JSON (default: StickSpace())")
+    a = ap.parse_args(argv)
+    space = space_from_dict(json.loads(a.space)) if a.space else StickSpace()
+    g = from_text(Path(a.genome).read_text(), space)
     global JOINT
     errors = []
     for joint in (JOINT, *RETRY_JOINTS):
         JOINT = joint
         try:
-            out = build_mesh(g, Path(args[1]), float(args[2]) if len(args) > 2 else 3.0)
+            out = build_mesh(g, Path(a.msh), a.size)
         except MeshError as exc:
             errors.append(f"joint {joint}: {exc}")
             continue

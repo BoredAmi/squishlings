@@ -1,0 +1,7 @@
+# Hand-made seed: a torso, a mirrored pair of bending legs with Dragon Skin feet, and a bending tail.
+seg len=30 r=6 mat=a
+  seg len=14 r=4 mat=a yaw=-60 pitch=-40 muscle=1 bend roll=90 sym
+    seg len=9 r=3 mat=b pitch=-30
+  seg len=20 r=4.5 mat=a yaw=180 pitch=-20 muscle=2 bend
+---
+freq=4 amp=8000 phases=0,3.142,0,0

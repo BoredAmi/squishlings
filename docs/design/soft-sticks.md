@@ -160,6 +160,9 @@ number of simulations, use at least 3 seeds per cell, and use the same locomotio
 
 ## First evolution (2026-11-18, prototype)
 
+The two runs below used a standalone prototype loop (`squishlings/sticks_evolve.py`) and check script
+(`spikes/sticks_check.py`), since replaced by `squishlings evolve jobs/sticks.yaml` and its `--check`.
+
 `python -m squishlings.sticks_evolve --generations 4 --population 8 --offspring 8 --jobs 6`, 2 s per creature
 (1.7 s of gait), seeded with an inchworm and a walker. Changes from the sketch, found while building it:
 

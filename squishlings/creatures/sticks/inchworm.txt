@@ -1,0 +1,6 @@
+# Hand-made seed: three segments in a row, the back two bending (soft-stick encoding).
+seg len=20 r=5 mat=a
+  seg len=20 r=4.5 mat=a muscle=1 bend
+    seg len=20 r=4.5 mat=a muscle=2 bend
+---
+freq=3 amp=8000 phases=0,1.571,0,0

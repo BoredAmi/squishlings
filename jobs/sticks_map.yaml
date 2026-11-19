@@ -1,0 +1,28 @@
+# MAP-Elites on soft sticks (README, "MAP-Elites"): instead of one ranked population, keep the fastest creature of
+# each kind of body: number of limbs (0 ... 5+) x elongation (wide ... long), 30 cells. Parents are drawn uniformly
+# from the occupied cells, so no body plan can take over. 32 starting creatures (the seeds, then random) and 38
+# batches of 16: 640 simulations, about 8 h on 8 laptop cores. Same creatures and muscles as sticks.yaml.
+#   squishlings evolve jobs/sticks_map.yaml --jobs 8        # writes archive.png, elites/, report.yaml
+#   squishlings evolve jobs/sticks_map.yaml --check 3 --jobs 8
+#   squishlings replay runs/sticks_map --best 4 --gif map.gif    # the fittest elites: one per kind
+scenario: ../squishlings/creatures/base.yaml
+backend: mujoco
+genome:
+  encoding: sticks
+  tissues: [ecoflex_00_30, dragon_skin_10]
+  muscle: {groups: 4, frequency: [1 Hz, 12 Hz], amplitude: [2 kPa, 30 kPa], start: 0.3 s}
+  max_segments: 10
+  length: [8 mm, 30 mm]
+  radius: [3 mm, 7 mm]
+  mesh_size: 3 mm
+evolution: {method: map_elites, population: 32, offspring: 16, generations: 38, crossover: 0.3, seed: 3}
+archive:
+  descriptors: [limbs, elongation]
+  bins: [6, 5]
+  ranges: [[0, 6], [-1, 3]]
+fitness: {metric: distance}
+seeds:
+  - ../squishlings/creatures/sticks/inchworm.txt
+  - ../squishlings/creatures/sticks/walker.txt
+  - ../squishlings/creatures/sticks/champion_1.txt
+output: ../runs/sticks_map

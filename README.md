@@ -107,9 +107,9 @@ How the encoding works:
   directly; that is the next step.
 
 ```bash
-python -m squishlings.sticks_evolve --generations 20 --population 16 --offspring 16 --jobs 8 --duration 3 \
-    --out runs/sticks_long --seeds squishlings/creatures/sticks/champion_1.txt
-python spikes/sticks_check.py runs/sticks_long --top 3            # exploit check
+squishlings evolve jobs/sticks.yaml --jobs 8             # resumable, like the voxel jobs
+squishlings evolve jobs/sticks.yaml --check 3 --jobs 8   # exploit check: mesh x2/3, time step / 2, friction ±20%
+squishlings replay runs/sticks --best 3 --gif sticks.gif --html sticks.html
 ```
 
 **First run** (2026-11-18, 20 generations, 336 creatures, 5.7 h on 8 laptop cores, no failures): the best distance
@@ -131,6 +131,38 @@ rose from 33 mm to 393 mm in 2.7 s of gait. Exploit check of the top 3:
 The design, the problems found while building it, and the results are in
 [docs/design/soft-sticks.md](docs/design/soft-sticks.md).
 
+## MAP-Elites
+
+A (μ+λ) run converges on one body plan. In the first soft-stick run, 139 of the 336 creatures were four-legged
+descendants of the same seed. MAP-Elites ([Mouret & Clune 2015](https://arxiv.org/abs/1504.04909)) keeps the
+fastest creature of each kind of body instead. Each creature gets descriptors computed from its genome (for
+sticks: `limbs`, `segments`, `elongation`, `height`; for voxels: `cells`, `elongation`, `height`). They place it
+in one cell of a grid, the archive, and it takes the cell if the cell is empty or it is faster than the creature
+there. Parents are drawn uniformly from the occupied cells, so every kind of body keeps improving, and no kind
+can take over.
+
+![The first soft-stick run, binned as an archive](docs/media/sticks_long_archive.png)
+
+*The first (μ+λ) soft-stick run seen as an archive: 17 of the 30 cells visited, and nearly every improvement
+in the four-legged and 5+ limb cells. Cells visited once by a random creature never improve.*
+
+```bash
+squishlings evolve jobs/sticks_map.yaml --jobs 8            # 640 simulations, ~8 h; resumable
+squishlings evolve jobs/sticks_map.yaml --check 3 --jobs 8
+squishlings replay runs/sticks_map --best 4 --gif map.gif   # the fittest elites, one per kind
+```
+
+To use it in a job, set `evolution: {method: map_elites, ...}` and add an `archive:` block (descriptors, bins,
+ranges). Each run writes:
+
+- `archive.png`: the best distance in each cell;
+- `elites/`: every elite as a scenario that runs in softsim;
+- the archive in `report.yaml`, with its coverage (share of cells filled) and QD-score (the sum of the elites'
+  distances: one number for quality and diversity together).
+
+The same idea, with a language model as the mutation operator, is the setup of *Evolution through Large Models*
+(Lehman et al. 2022).
+
 ## Files
 
 | | |
@@ -139,14 +171,14 @@ The design, the problems found while building it, and the results are in
 | `squishlings/build.py` | genome ↔ softsim scenario |
 | `squishlings/evolve.py` | the evolution loop and the exploit check |
 | `squishlings/locomotion.py` | the `locomotion` scenario (registered with softsim as `scenario: locomotion`) |
+| `squishlings/map_elites.py` | MAP-Elites: descriptors, the archive, its heatmap |
 | `squishlings/replay.py` | GIF and HTML replays |
 | `squishlings/creatures/` | `base.yaml` (shared settings), seeds (`inchworm`, `quad`), the first run's champions |
-| `jobs/` | `crawler.yaml` (fast, exploratory), `crawler_fine.yaml` (recommended) |
+| `jobs/` | `crawler.yaml` (fast, exploratory), `crawler_fine.yaml` (recommended), `sticks.yaml` (soft sticks), `sticks_map.yaml` (soft sticks, MAP-Elites) |
 | `squishlings/sticks.py` | soft sticks: the text genome and its operators |
 | `squishlings/sticks_mesh.py` | soft sticks → gmsh mesh with muscle regions → softsim scenario |
-| `squishlings/sticks_evolve.py` | the soft-stick evolution loop (prototype, not yet behind `squishlings evolve`) |
-| `squishlings/creatures/sticks/` | the first soft-stick run's champions |
-| `spikes/` | the soft-stick feasibility spike and exploit check |
+| `squishlings/creatures/sticks/` | soft-stick seeds (`inchworm`, `walker`) and the first run's champions |
+| `spikes/` | the soft-stick feasibility spike |
 
 ## Ideas
 

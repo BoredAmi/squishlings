@@ -1,0 +1,25 @@
+# Evolve soft-stick creatures (README, "Soft sticks"): trees of up to 10 Ecoflex 00-30 (a) and Dragon Skin 10 (b)
+# capsules with bending or axial muscles, meshed at 3 mm; each runs 3 s on MuJoCo (0.3 s settling, then 2.7 s of gait)
+# and scores the distance its centre of mass travels. Seeded with the hand-made seeds and the first run's champions
+# (evolved with amplitudes up to 15 kPa; this job allows 30). About 15-20 min a generation on 8 laptop cores.
+#   squishlings evolve jobs/sticks.yaml --jobs 8
+#   squishlings evolve jobs/sticks.yaml --check 3 --jobs 8     # exploit check of the 3 best
+scenario: ../squishlings/creatures/base.yaml
+backend: mujoco
+genome:
+  encoding: sticks
+  tissues: [ecoflex_00_30, dragon_skin_10]
+  muscle: {groups: 4, frequency: [1 Hz, 12 Hz], amplitude: [2 kPa, 30 kPa], start: 0.3 s}
+  max_segments: 10
+  length: [8 mm, 30 mm]
+  radius: [3 mm, 7 mm]
+  mesh_size: 3 mm
+evolution: {population: 16, offspring: 16, generations: 30, tournament: 3, crossover: 0.3, seed: 2}
+fitness: {metric: distance, size_penalty: 0}
+seeds:
+  - ../squishlings/creatures/sticks/inchworm.txt
+  - ../squishlings/creatures/sticks/walker.txt
+  - ../squishlings/creatures/sticks/champion_1.txt
+  - ../squishlings/creatures/sticks/champion_2.txt
+  - ../squishlings/creatures/sticks/champion_3.txt
+output: ../runs/sticks
