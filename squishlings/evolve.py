@@ -15,7 +15,8 @@ A job file::
       max_cells: 40
       fill: 0.5
     evolution: {population: 24, offspring: 24, generations: 40, tournament: 3, crossover: 0.5, seed: 0}
-    fitness: {metric: distance, size_penalty: 0}  # per-cell penalty in the metric's unit
+    fitness: {metric: distance, size_penalty: 0}  # per-cell penalty in the metric's unit; max_height (default
+                                                  # 10 cm): ending higher marks a blow-up, the worst fitness
     seeds: [../squishlings/creatures/inchworm.yaml]   # optional hand-made creatures in the first population
     output: ../runs/crawler
 
@@ -31,6 +32,16 @@ from parents picked uniformly among the archive's elites; a child takes its cell
 bins) if the cell is empty or it beats the elite there. ``tournament`` is unused. Outputs also
 ``archive.png`` (best fitness per cell), ``elites/`` (every elite as a runnable scenario) and the archive in
 ``report.yaml`` (coverage, QD-score, cells). ``best/`` holds the fittest elites, which are of different kinds.
+
+A language model as mutation operator (soft sticks with MAP-Elites, :mod:`squishlings.llm`)::
+
+    evolution: {method: map_elites, ..., llm: {model: "qwen3.5:9b", rate: 0.5, examples: 3}}
+
+With probability ``rate`` a child is the model's edit of its parent (shown the parent, its distance and kind, and
+the ``examples`` fittest other elites) instead of crossover + random mutation; an answer that does not parse or
+changes nothing falls back to random mutation. Needs a running ollama (``url``, default http://localhost:11434).
+Answers are cached in ``<output>/llm.jsonl``, so a stopped run resumes without asking again. The report adds how
+many children came from the model and how many of them entered the archive.
 
 Method: a (mu + lambda) evolution strategy. Each generation draws ``offspring`` children by tournament selection,
 uniform choice between crossover (probability ``crossover``) + mutation and mutation alone
@@ -81,7 +92,8 @@ _GENOME_FIELDS = {"friction", "shape", "voxel", "tissues", "muscle", "min_cells"
 _MUSCLE_FIELDS = {"material", "groups", "frequency", "amplitude", "start"}
 _STICK_FIELDS = {"encoding", "tissues", "muscle", "max_segments", "max_depth", "length", "radius", "mesh_size",
                  "mesh_timeout", "muscle_rate", "phase_sigma", "scalar_sigma", "angle_sigma"}
-_EVO_FIELDS = {"method", "population", "offspring", "generations", "tournament", "crossover", "seed"}
+_EVO_FIELDS = {"method", "population", "offspring", "generations", "tournament", "crossover", "seed", "llm"}
+_LLM_FIELDS = {"model", "rate", "url", "temperature", "examples", "think", "timeout"}
 
 
 def _call(pair: tuple) -> Any:
@@ -312,13 +324,36 @@ class Evolution:
             self.axes = axes_from_spec(aspec, set(self.enc.descriptors))
         elif spec.get("archive"):
             raise ConfigError("archive: only with evolution.method: map_elites")
+        self.llm = None
+        if espec.get("llm"):
+            from squishlings.llm import LLMMutator
+
+            lspec = dict(espec["llm"])
+            _check_keys(lspec, _LLM_FIELDS, "evolution.llm")
+            if self.encoding != "sticks" or self.method != "map_elites":
+                raise ConfigError("evolution.llm: only for soft sticks with method: map_elites")
+            if "model" not in lspec:
+                raise ConfigError("evolution.llm: needs a 'model' (an ollama model, e.g. qwen3.5:9b)")
+            self.llm_rate = float(lspec.get("rate", 0.5))
+            self.llm_examples = int(lspec.get("examples", 3))
+            if not 0 <= self.llm_rate <= 1 or self.llm_examples < 0:
+                raise ConfigError("evolution.llm: rate in [0, 1], examples >= 0")
+            self.llm = LLMMutator(str(lspec["model"]), self.enc.space, self.output / "llm.jsonl",
+                                  url=str(lspec.get("url", "http://localhost:11434")),
+                                  temperature=float(lspec.get("temperature", 0.8)),
+                                  think=bool(lspec.get("think", False)),
+                                  timeout=float(lspec.get("timeout", 300)))
+            self.llm_counts = {"proposed": 0, "used": 0, "into_archive": 0}
         if min(self.population, self.offspring, self.tournament) < 1 or self.generations < 0:
             raise ConfigError("evolution: population, offspring and tournament >= 1, generations >= 0")
 
         fspec = dict(spec.get("fitness") or {})
-        _check_keys(fspec, {"metric", "size_penalty"}, "fitness")
+        _check_keys(fspec, {"metric", "size_penalty", "max_height"}, "fitness")
         self.metric = str(fspec.get("metric", "distance"))
         self.size_penalty = float(fspec.get("size_penalty", 0.0))
+        # a creature still this high at the end was launched by a numerical blow-up, not by a gait (2026-11-19:
+        # a 5 cm stick creature ended 17.6 cm up, flipped, "2.7 m" away; no other creature in 1,400 above 6 cm)
+        self.max_height = parse_quantity(fspec.get("max_height", "10 cm"), "length")
         self.seed_files = [(self.path.parent / s).resolve() for s in spec.get("seeds", [])]
 
         self._key_hash = _hash({"scenario": hashlib.sha256(scenario.read_bytes()).hexdigest(),
@@ -382,6 +417,8 @@ class Evolution:
         if self.metric not in summary:
             raise ConfigError(f"fitness metric {self.metric!r} is not in the scenario's summary; available: "
                               f"{', '.join(sorted(summary))}")
+        if summary.get("final_max_z", 0.0) > self.max_height:
+            return -math.inf
         value = float(summary[self.metric])
         return value - self.size_penalty * self.enc.size(g) if math.isfinite(value) else -math.inf
 
@@ -454,19 +491,31 @@ class Evolution:
             self._record_archive(0, archive)
             for gen in range(1, self.generations + 1):
                 elites = [g for _, g, _, _ in archive.elites()]
-                children = []
+                children, from_llm = [], set()
                 for _ in range(self.offspring):
                     if not elites:  # nothing valid yet: keep sampling at random
                         children.append(self.enc.random(rng))
                         continue
                     a = elites[int(rng.integers(len(elites)))]
+                    if self.llm is not None:  # both draws always made: the random stream does not depend on answers
+                        ask, seed = rng.random() < self.llm_rate, int(rng.integers(2**31))
+                        if ask:
+                            child = self._llm_child(a, archive, seed)
+                            if child is not None:
+                                children.append(child)
+                                from_llm.add(child.key)
+                                continue
                     if rng.random() < self.p_crossover and len(elites) > 1:
                         a = self.enc.crossover(a, elites[int(rng.integers(len(elites)))], rng)
                     children.append(self.enc.mutate(a, rng))
                 self._ensure(children)
-                for g in children:
-                    archive.add(g, self.fitness(g))
+                entered = sum(archive.add(g, self.fitness(g)) and g.key in from_llm for g in children)
                 self._record_archive(gen, archive)
+                if self.llm is not None:
+                    self.llm_counts["used"] += len(from_llm)
+                    self.llm_counts["into_archive"] += entered
+                    print(f"           llm: {len(from_llm)} children, {entered} into the archive "
+                          f"({self.llm.stats})", flush=True)
                 if gen % 5 == 0:
                     self._write_archive(archive)
         finally:
@@ -475,6 +524,13 @@ class Evolution:
                 self._pool = None
         ranked = sorted((g for _, g, _, _ in archive.elites()), key=lambda g: (-self.fitness(g), g.key))
         return self._write(ranked, archive=archive)
+
+    def _llm_child(self, parent, archive, seed: int):
+        others = sorted((e for e in archive.elites() if e[1].key != parent.key), key=lambda e: (-e[2], e[1].key))
+        self.llm_counts["proposed"] += 1
+        child, _ = self.llm.propose(parent, self.fitness(parent), self.enc.describe(parent),
+                                    [(g, f, d) for _, g, f, d in others[:self.llm_examples]], seed)
+        return child
 
     def _record_archive(self, generation: int, archive) -> None:
         ranked = sorted(archive.elites(), key=lambda e: (-e[2], e[1].key))
@@ -577,8 +633,12 @@ class Evolution:
         report = {"job": str(self.path), "metric": self.metric, "size_penalty": self.size_penalty,
                   "generations": int(self.history[-1]["generation"]) if self.history else 0,
                   "evaluated": len(self._done), "simulated_this_run": self.n_simulated, "failed": failed,
+                  "rejected_too_high": sum(v.get("final_max_z", 0.0) > self.max_height for v in self._done.values()),
                   "best": best}
         if archive is not None:
             report = {"method": "map_elites", **report, "archive": self._write_archive(archive)}
+        if getattr(self, "llm", None) is not None:
+            report["llm"] = {"model": self.llm.model, "rate": self.llm_rate, **self.llm_counts,
+                             "answers": dict(self.llm.stats)}
         (self.output / "report.yaml").write_text(yaml.safe_dump(report, sort_keys=False))
         return report

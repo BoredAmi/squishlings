@@ -1,188 +1,221 @@
 # Squishlings
 
-Evolve soft creatures that crawl. Squishlings grows bodies out of one-centimetre cubes of real silicones
-(Ecoflex 00-30, Dragon Skin 10), gives them muscles that pulse on oscillators, and lets evolution find the ones that
-travel furthest. The idea is the one [Framsticks](https://www.framsticks.com/) made famous with stick creatures;
-here every creature is a soft solid, simulated with [softsim](https://github.com/BoredAmi/softsim)'s material cards on
-MuJoCo flex.
+Evolve soft creatures that crawl, and let a language model help design them. Squishlings grows bodies from real
+silicones (Ecoflex 00-30, Dragon Skin 10), gives them muscles that pulse on oscillators, simulates them with
+[softsim](https://github.com/BoredAmi/softsim)'s material cards on MuJoCo flex, and keeps the ones that travel
+furthest. The idea is the one [Framsticks](https://www.framsticks.com/) made famous with stick creatures; here
+every creature is a soft solid.
 
-![The three champions of the first run, crawling](docs/media/crawlers.gif)
+![The best creature of random evolution next to the two best with a language model in the loop](docs/media/llm_vs_random.gif)
 
-*The three best creatures of the first run (2³ mesh cubes per voxel). Grey: Ecoflex 00-30, blue: Dragon Skin 10,
-reds and oranges: the four muscle groups. Each travels 0.5-0.6 m in 2.7 s.*
+*Left: the best soft-stick creature found by MAP-Elites with random mutation (1123 mm in 2.7 s). Middle and right:
+the two best when a local language model (qwen3.5:9b) writes half of the children (1618 mm, 1380 mm). Same seed,
+same starting creatures, same 640 simulations.*
+
+## What is in here
+
+- **Two body encodings.** *Voxels*: a grid of 1 cm cubes of tissue and muscle. *Soft sticks*: a tree of silicone
+  capsules written as indented text, meshed with gmsh: the Framsticks idea, made soft.
+- **Two search methods.** A (μ+λ) evolution strategy, and MAP-Elites, which keeps the best creature of each kind
+  of body instead of one ranked population.
+- **A language model as a mutation operator.** The stick genome is plain text, so an LLM can read a parent and
+  write an edited one ([Evolution through Large Models](https://arxiv.org/abs/2206.08896), run offline on
+  [ollama](https://ollama.com)).
+- **An exploit check.** Evolution finds numerical artefacts as eagerly as gaits, so every champion is re-run on a
+  finer mesh, with half the time step, and with friction ±20%.
+
+## Results so far
+
+All distances are the centre of mass travelled in 2.7 s after settling, on MuJoCo (2026-11-17 to 11-20, one PC,
+8 cores).
+
+| Run | Encoding, method | Simulations | Best | Exploit check |
+| --- | --- | --- | --- | --- |
+| `crawler_fine` | voxels, (μ+λ) | 208 | 683 mm | −13% to −26% on a finer mesh |
+| `sticks` (first run) | sticks, (μ+λ), ≤ 8 Hz, ≤ 15 kPa | 336 | 393 mm | within 16% |
+| `sticks` (second run) | sticks, (μ+λ), ≤ 12 Hz, ≤ 30 kPa | 496 | 1412 mm | within 9%, but it buzzes (below) |
+| `sticks_map` | sticks, MAP-Elites, random mutation | 640 | 1123 mm | |
+| `sticks_map_llm` | sticks, MAP-Elites, random + LLM | 640 | **1618 mm** | within 3%, friction ×1.2: −23% |
+
+## A language model in the loop
+
+The question (from Prof. Jakub Bernat): can an LLM propose changes to a robot's geometry, with an evolutionary
+algorithm keeping the better ones and a simulator judging them? Here is the first experiment.
+
+**Setup.** Two MAP-Elites runs, identical (seed, starting creatures, 38 batches of 16 children) except that in
+`sticks_map_llm` each child has a 50% chance to be written by `qwen3.5:9b` instead of by crossover and random
+mutation. The model sees the encoding rules, the parent, its distance and kind of body, and the three best other
+elites, and answers with one line of reasoning and a complete new genome.
+
+![QD-score and best distance per batch, random mutation against random + LLM](docs/media/llm_vs_random.png)
+
+| After 640 simulations | Random mutation | Random + LLM |
+| --- | --- | --- |
+| QD-score (sum of the elites' distances) | 9.85 m | **12.29 m** (+25%) |
+| Best distance | 1123 mm | **1618 mm** (+44%) |
+| Cells filled (of 30) | 27 | 27 |
+
+**The model is a reliable operator.** It wrote 297 children: 5 answers did not parse (it wrote `1.2+pi` as a
+phase, for example) and 3 changed nothing; those fell back to random mutation. 58 of its children (20%) entered
+the archive. A 9B model on an RTX 3060 answers in about 7 s, while the simulations of a batch take 12 minutes, so
+the model costs almost nothing.
+
+**It makes the big jumps; random mutation tunes them.** The champion's lineage:
+
+![The champion's lineage: random mutation, then the LLM's redesign, then random tuning](docs/media/llm_lineage.gif)
+
+1. 384 mm, made by random mutation;
+2. **1176 mm, the model's redesign** (×3): *"The parent robot has 6 limbs but only utilizes muscle groups 1 and 3
+   effectively… I will remove the two short, stiff 'foot' segments…"*;
+3. 1618 mm, random mutation tuning the redesign.
+
+![The same three creatures in 10× slow motion](docs/media/llm_vs_random_slowmo.gif)
+
+*The same creatures as at the top, 0.4 s of gait in 10× slow motion. At 10-12 Hz the normal-speed GIFs cannot
+show a stride; this one can.*
+
+| Random mutation | Random + LLM |
+| --- | --- |
+| ![Archive of the random-mutation run](docs/media/archive_random.png) | ![Archive of the LLM run](docs/media/archive_llm.png) |
+
+**How far this goes.** One seed per arm: a strong first result, not yet proof. The next step is two more seeds for
+each arm. Both champions sit at the muscle limits (12 Hz, 30 kPa), and the model can only edit what the encoding
+can say.
+
+```bash
+ollama pull qwen3.5:9b
+squishlings evolve jobs/sticks_map_llm.yaml --jobs 8   # ~9 h; resumable, every answer cached in llm.jsonl
+```
+
+In a job, set `evolution: {method: map_elites, ..., llm: {model: "qwen3.5:9b", rate: 0.5, examples: 3}}`.
 
 ## Quick start
 
 ```bash
-pip install -e .                                   # needs softsim >= 0.2.0 (voxel bodies and muscles)
-squishlings creatures                              # the packaged seeds and champions
-softsim run sq  uishlings/creatures/champion_1.yaml  # run one; any softsim command works on a creature
-squishlings evolve jobs/crawler_fine.yaml --jobs 6                    # evolve (~4 min a generation, resumable)
-squishlings evolve jobs/crawler_fine.yaml --check 3                   # exploit check of the 3 best
-squishlings replay runs/crawler_fine --best 3 --gif crawlers.gif --html crawlers.html
+pip install -e .                                    # needs softsim >= 0.2.0 (voxel bodies and muscles), gmsh
+squishlings creatures                               # the packaged seeds and champions
+softsim run squishlings/creatures/champion_1.yaml   # run one; any softsim command works on a creature
+squishlings evolve jobs/sticks_map.yaml --jobs 8    # evolve (resumable)
+squishlings evolve jobs/sticks_map.yaml --check 3 --jobs 8   # exploit check of the 3 best
+squishlings replay runs/sticks_map --best 3 --gif best.gif --html best.html
 ```
 
-The HTML replay is one self-contained page: open it in a browser, orbit the camera, pick a creature, scrub through
-time. Muscles brighten as they contract.
+If `squishlings` is installed in softsim's virtual environment, activate it first
+(`source ../softsim/.venv/bin/activate`). The HTML replay is one self-contained page: orbit the camera, pick a
+creature, scrub through time; muscles brighten as they contract.
 
-## How a creature is made
+## Soft sticks
 
-- **Body:** a grid of up to 6 × 6 × 4 cells. Each cell is empty, a tissue (`a`, `b`: material cards) or a muscle
-  group (`1`-`4`). It becomes a softsim `voxels` body; every label is a material zone. Cubes are bonded through their
-  faces, and only the largest connected part survives, standing on the ground.
-- **Muscles:** softsim's `type: muscle` actuator, an active stress along a fibre (x, y or z) or isotropic, driven by
-  `amplitude · sin(2π f t + phase)`. Each group has its own phase and direction. Frequency (1-12 Hz) and amplitude
-  (5-40 kPa) are shared by the creature and evolve too. The muscle is an effective model: no real device produces a
-  volumetric stress. It is the standard abstraction of evolved soft robots. To build a creature, replace each group
-  with a pneumatic chamber or a cable that gives the same strain; softsim validates both.
-- **Evolution:** a (μ+λ) strategy. Tournament selection, one-cut crossover, mutation of cells, phases, directions and
-  scalars; the best of parents and children survive, so the champion is never lost. Hand-made creatures can seed the
-  first population. Every simulation is cached in `evaluations.jsonl`: a run is deterministic for a seed, and a
-  stopped run resumes without re-simulating (a laptop shutdown cost one generation).
-- **Fitness:** the planar distance the centre of mass travels after 0.3 s of settling, in 3 s on MuJoCo. Any metric of
-  the `locomotion` scenario can serve: `distance_x`, `mean_speed`, `path_length`, `max_tilt`, `turn`, `flipped`.
-
-## How far to trust a distance
-
-Evolution finds whatever moves the creature, including numerical artefacts. `--check` re-runs the champions with
-each cube split into 2³, half the time step, and friction ×0.8 and ×1.2, and flags any gait whose distance moves by
-more than 25%. What it found on the first runs (2026-11-17, laptop, 6 workers):
-
-| Run | Creatures | Distance as evolved | One mesh level finer | Time step / 2 | Friction ±20% |
-|---|---|---|---|---|---|
-| `crawler.yaml`, 1 cube per voxel, 30 generations | 744 | 882 / 822 / 817 mm | −45% / −45% / −80% | +2-4%, −6% | under 9% |
-| `crawler_fine.yaml`, 2³ per voxel, 12 generations | 208 | 683 / 672 / 667 mm | −17% / −13% / −26% (3³) | | |
-
-The gaits hop more than they slide, so friction barely matters. The mesh does: MuJoCo's linear tetrahedra are too
-stiff in bending, and a one-cube limb is six of them, so the coarse run evolved creatures that rely on stiff legs.
-Evolving at 2³ halves the error, and its winners beat the coarse winners at 3³ too (569-585 against 333-360 mm).
-**Distances rank creatures at the run's resolution; they are not converged speeds.** Evolve with `subdivide: 2` and
-check the winners one level finer.
-
-Two more effects of the numerics:
-
-- **Friction:** MuJoCo uses the larger of the two friction coefficients in a contact, and the silicone cards say 1.0, so
-  a ground friction of 0.8 alone does nothing. Squishlings writes one friction (`genome.friction`, default the
-  ground's) into the ground, the body and every zone.
-- **Symmetry:** the six tetrahedra of each cube are not mirror symmetric, so a symmetric body drifts sideways (the
-  inchworm about 1 mm per 5 mm forward).
-
-Also: on MuJoCo every run prints "Flex stiffness is too ill-conditioned" and "Inertia matrix is too close to
-singular" warnings, nearly all on the first time step, where the solver starts from rest with nothing to warm-start
-from. They do not affect the results (no run failed, replays reproduce the evolved distances exactly).
-
-## Soft sticks (prototype)
-
-A second body encoding, closer to Framsticks: the body is a tree of soft capsules joined end to end, written as
-indented text. This champion has a torso, two mirrored leg pairs, and a tail:
+A body is a tree of soft capsules joined end to end, written as indented text, plus a footer for the muscles.
+This is the LLM run's champion:
 
 ```text
-seg len=29.5 r=6 mat=a muscle=2 bend
-  seg len=14 r=5.4 mat=a yaw=-60 pitch=-40 muscle=1 bend roll=90 sym
-    seg len=9 r=3 mat=b pitch=-13
-  seg len=20 r=5.5 mat=a yaw=-180 pitch=-20 muscle=2
-    seg len=12.4 r=4 mat=a yaw=-60 pitch=-40 muscle=1 sym
-      seg len=9 r=3 mat=b pitch=-30
+seg len=30 r=6 mat=a muscle=2
+  seg len=18 r=5 mat=a yaw=-70 pitch=-45 muscle=1 bend roll=90 sym
+    seg len=10 r=4 mat=b pitch=-20
+  seg len=18 r=5 mat=a yaw=70 pitch=45 muscle=4 bend roll=-90 sym
+    seg len=10 r=4 mat=b pitch=20
 ---
-freq=6.95 amp=15000 phases=1.500,4.843,3.964,6.030
+freq=12 amp=30000 phases=3.192,6.155,2.465,3.077
 ```
 
-![The three best soft-stick creatures, crawling](docs/media/sticks.gif)
-
-*The three best creatures of the first soft-stick run. Reds and oranges: Ecoflex 00-30 muscles (every Ecoflex
-segment of these champions evolved into one; the two halves of a bending muscle are lighter and darker), blue:
-passive Dragon Skin 10 feet. Each travels 360-390 mm in 2.7 s.*
-
-How the encoding works:
-
-- **Segments:** each segment has a length, a radius, a tissue and a direction relative to its parent (`yaw`,
-  `pitch`). It can also have a muscle group, which either contracts along its axis or, with `bend`, is split
-  lengthwise into two halves driven in antiphase so it curls (`roll` sets the bend plane). `sym` adds a mirrored
-  copy of the subtree. A body has at most 10 segments.
+- **Segments:** a length and a radius (mm), a tissue (`a`: Ecoflex 00-30, `b`: Dragon Skin 10), and a direction
+  relative to the parent (`yaw`, `pitch`). A child grows from its parent's far end. `sym` adds a mirrored copy of
+  the subtree. At most 10 segments.
+- **Muscles:** `muscle=g` makes a segment group `g`, contracting along its axis with
+  `amp · sin(2π · freq · t + phase_g)`. With `bend` the segment is split lengthwise into two halves driven in
+  antiphase, so it curls (`roll` turns the plane it curls in).
 - **Mesh:** gmsh fuses the cylinders and the joint spheres into one solid, trims it flat 1.5 mm above its lowest
   point (round bodies roll over otherwise), and meshes it at 3 mm. Each tet is labelled by the capsule it lies in,
   and the result is a softsim `mesh_file` body.
-- **Evolution:** (μ+λ) as for voxels. Mutation steps a number, adds, deletes or copies a subtree, or toggles a
-  muscle, `bend` or `sym`. Crossover swaps subtrees. The text is the genome, so a language model can edit it
-  directly; that is the next step.
+- **Operators:** mutation steps a number, adds, deletes or copies a subtree, or toggles a muscle, `bend` or `sym`;
+  crossover swaps subtrees. Every genome, including a language model's, goes through `repair`, which clamps each
+  value to its range and prunes the tree to the limits, so anything that parses can be simulated.
 
-```bash
-squishlings evolve jobs/sticks.yaml --jobs 8             # resumable, like the voxel jobs
-squishlings evolve jobs/sticks.yaml --check 3 --jobs 8   # exploit check: mesh x2/3, time step / 2, friction ±20%
-squishlings replay runs/sticks --best 3 --gif sticks.gif --html sticks.html
-```
+**Colours in the GIFs:** blue: passive Dragon Skin 10 (the feet), grey: passive Ecoflex 00-30, reds and oranges:
+Ecoflex muscles, one shade per segment; the two halves of a bending muscle are lighter and darker.
 
-**First run** (2026-11-18, 20 generations, 336 creatures, 5.7 h on 8 laptop cores, no failures): the best distance
-rose from 33 mm to 393 mm in 2.7 s of gait. Exploit check of the top 3:
+## Voxels
 
-| Creature | Distance as evolved | Mesh 3 → 2 mm | Time step / 2 | Friction ×0.8 | Friction ×1.2 |
-| --- | --- | --- | --- | --- | --- |
-| `champion_1` | 393 mm | +2% | +4% | −16% | +6% |
-| `champion_2` | 391 mm | +10% | −2% | −16% | +12% |
-| `champion_3` | 362 mm | +11% | −1% | −16% | +14% |
+The first encoding: a grid of up to 6 × 6 × 4 one-centimetre cells, each empty, a tissue or one of four muscle
+groups, built as a softsim `voxels` body. Muscles are an active stress along x, y or z, or isotropic.
 
-- **The mesh matters much less than for voxels:** +2% to +11% one step finer, against −13% to −26% for 2³ voxels.
-  The step is smaller, though (1.7× the tets, against 3.4×), and the distances still grow, so the coarse mesh is
-  slightly too stiff. Creatures within about 10% of each other do not rank reliably.
-- **These gaits crawl rather than hop,** so friction matters more than it does for the voxel gaits.
-- **Voxels still go further:** 400-430 mm for sticks against 569-585 mm for voxels, both on the finer mesh. The
-  voxels had 42 generations and muscles up to 40 kPa, and the stick champion sits at its 15 kPa limit.
+![The three champions of the first voxel run, crawling](docs/media/crawlers.gif)
 
-The design, the problems found while building it, and the results are in
+*The three best voxel creatures (2³ mesh cubes per voxel). Grey: Ecoflex 00-30, blue: Dragon Skin 10, reds and
+oranges: the four muscle groups. 0.5-0.6 m in 2.7 s.*
+
+The muscle is an effective model: no real device produces a volumetric stress. It is the standard abstraction
+of evolved soft robots; to build a creature, replace each group with a pneumatic chamber or a cable that gives the
+same strain (softsim validates both).
+
+## Search
+
+- **(μ+λ):** tournament selection, crossover and mutation; the best of parents and children survive, so the
+  champion is never lost. It converges on one body plan: in the first stick run, 139 of 336 creatures were
+  four-legged descendants of the same seed.
+- **MAP-Elites** ([Mouret & Clune 2015](https://arxiv.org/abs/1504.04909)): each creature gets descriptors computed
+  from its genome (sticks: `limbs`, `segments`, `elongation`, `height`; voxels: `cells`, `elongation`, `height`),
+  which place it in a cell of a grid. It takes the cell if the cell is empty or it beats the creature there.
+  Parents are drawn uniformly from the occupied cells, so every kind of body keeps improving. In the random-mutation
+  run this kept the inchworm lineage alive, which then became the best three- and four-limbed creatures; in the
+  (μ+λ) run it died out in the first generations.
+- **Fitness:** the planar distance of the centre of mass, after 0.3 s of settling. Any metric of the `locomotion`
+  scenario can serve (`distance_x`, `mean_speed`, `path_length`, `max_tilt`, `turn`, `flipped`).
+- **Caching:** every simulation goes into `evaluations.jsonl`, so a run is deterministic for a seed, and a stopped
+  run resumes without simulating again.
+
+Each MAP-Elites run writes `archive.png` (the best distance per cell), `elites/` (each elite as a runnable softsim
+scenario), and the archive in `report.yaml` with its coverage and QD-score.
+
+## How far to trust a distance
+
+Evolution finds whatever moves the creature, including numerical artefacts. What we have found so far:
+
+- **Mesh resolution (voxels):** MuJoCo's linear tetrahedra are too stiff in bending. Voxel champions evolved on
+  one cube per voxel lost 45-80% on a finer mesh, and those evolved on 2³ lost 13-26%. Stick champions change by
+  0-11% from a 3 mm to a 2 mm mesh. **Distances rank creatures at the run's resolution; they are not converged
+  speeds.**
+- **Blow-ups:** one creature of the LLM run ended its run 17.6 cm in the air, flipped over, and was scored at
+  2.7 m: the simulation had launched it. No other creature of about 1,400 ended above 6 cm. A creature still
+  higher than `fitness.max_height` (default 10 cm) at the end now gets the worst fitness, and the report counts
+  them.
+- **Buzzing:** the second (μ+λ) stick run reached 1412 mm with a compact body vibrating at 12 Hz, its legs moving a
+  few millimetres per stroke. It passes the numerical checks, but it is the kind of gait to distrust until the
+  frequency is capped lower. The MAP-Elites champions move with large, visible strokes (see the slow-motion GIF).
+- **Friction:** MuJoCo uses the larger of the two friction coefficients in a contact, so a lower ground friction
+  alone does nothing. Squishlings writes one friction into the ground, the body and every zone.
+- **Warnings:** every MuJoCo run prints "Flex stiffness is too ill-conditioned" and "Inertia matrix is too close
+  to singular", nearly all on the first time step. They do not affect the results: replays reproduce the
+  evolved distances exactly.
+
+`--check N` re-runs the N best with a finer mesh, half the time step and friction ×0.8 and ×1.2, and flags any
+whose distance moves by more than 25%.
+
+The design notes, the spike, and the problems found while building the soft sticks are in
 [docs/design/soft-sticks.md](docs/design/soft-sticks.md).
-
-## MAP-Elites
-
-A (μ+λ) run converges on one body plan. In the first soft-stick run, 139 of the 336 creatures were four-legged
-descendants of the same seed. MAP-Elites ([Mouret & Clune 2015](https://arxiv.org/abs/1504.04909)) keeps the
-fastest creature of each kind of body instead. Each creature gets descriptors computed from its genome (for
-sticks: `limbs`, `segments`, `elongation`, `height`; for voxels: `cells`, `elongation`, `height`). They place it
-in one cell of a grid, the archive, and it takes the cell if the cell is empty or it is faster than the creature
-there. Parents are drawn uniformly from the occupied cells, so every kind of body keeps improving, and no kind
-can take over.
-
-![The first soft-stick run, binned as an archive](docs/media/sticks_long_archive.png)
-
-*The first (μ+λ) soft-stick run seen as an archive: 17 of the 30 cells visited, and nearly every improvement
-in the four-legged and 5+ limb cells. Cells visited once by a random creature never improve.*
-
-```bash
-squishlings evolve jobs/sticks_map.yaml --jobs 8            # 640 simulations, ~8 h; resumable
-squishlings evolve jobs/sticks_map.yaml --check 3 --jobs 8
-squishlings replay runs/sticks_map --best 4 --gif map.gif   # the fittest elites, one per kind
-```
-
-To use it in a job, set `evolution: {method: map_elites, ...}` and add an `archive:` block (descriptors, bins,
-ranges). Each run writes:
-
-- `archive.png`: the best distance in each cell;
-- `elites/`: every elite as a scenario that runs in softsim;
-- the archive in `report.yaml`, with its coverage (share of cells filled) and QD-score (the sum of the elites'
-  distances: one number for quality and diversity together).
-
-The same idea, with a language model as the mutation operator, is the setup of *Evolution through Large Models*
-(Lehman et al. 2022).
 
 ## Files
 
-| | |
-|---|---|
-| `squishlings/genome.py` | the encoding and its operators (mutation, crossover, repair) |
-| `squishlings/build.py` | genome ↔ softsim scenario |
-| `squishlings/evolve.py` | the evolution loop and the exploit check |
-| `squishlings/locomotion.py` | the `locomotion` scenario (registered with softsim as `scenario: locomotion`) |
-| `squishlings/map_elites.py` | MAP-Elites: descriptors, the archive, its heatmap |
-| `squishlings/replay.py` | GIF and HTML replays |
-| `squishlings/creatures/` | `base.yaml` (shared settings), seeds (`inchworm`, `quad`), the first run's champions |
-| `jobs/` | `crawler.yaml` (fast, exploratory), `crawler_fine.yaml` (recommended), `sticks.yaml` (soft sticks), `sticks_map.yaml` (soft sticks, MAP-Elites) |
-| `squishlings/sticks.py` | soft sticks: the text genome and its operators |
+| File | What it is |
+| --- | --- |
+| `squishlings/sticks.py` | soft sticks: the text genome, its operators and repair |
 | `squishlings/sticks_mesh.py` | soft sticks → gmsh mesh with muscle regions → softsim scenario |
-| `squishlings/creatures/sticks/` | soft-stick seeds (`inchworm`, `walker`) and the first run's champions |
+| `squishlings/llm.py` | the language-model mutation operator (ollama) |
+| `squishlings/map_elites.py` | MAP-Elites: descriptors, the archive, its heatmap |
+| `squishlings/evolve.py` | the evolution loop ((μ+λ) and MAP-Elites) and the exploit check |
+| `squishlings/genome.py`, `build.py` | voxels: the encoding, its operators, genome ↔ softsim scenario |
+| `squishlings/locomotion.py` | the `locomotion` scenario (registered with softsim) |
+| `squishlings/replay.py` | GIF and HTML replays |
+| `squishlings/creatures/` | seeds and champions: voxels (`*.yaml`), soft sticks (`sticks/*.txt`) |
+| `jobs/` | `crawler*.yaml` (voxels), `sticks.yaml` ((μ+λ)), `sticks_map.yaml` (MAP-Elites), `sticks_map_llm.yaml` (MAP-Elites + LLM) |
 | `spikes/` | the soft-stick feasibility spike |
 
-## Ideas
+## Next
 
-Neural controllers reading touch and strain sensors instead of open-loop oscillators (Framsticks' brains); swimming
-and climbing tasks; turning muscle groups into buildable chambers and cables; a GPU backend for larger populations.
+- Two more seeds for each arm of the LLM experiment, then voxels × {random, LLM} for the full 2 × 2 comparison.
+- A lower frequency cap (about 6 Hz) to rule out buzzing gaits.
+- Neural controllers reading touch and strain sensors instead of open-loop oscillators (Framsticks' brains).
+- Turning muscle groups into buildable chambers and cables.
 
 Licence: Apache-2.0.

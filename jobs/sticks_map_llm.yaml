@@ -1,0 +1,27 @@
+# MAP-Elites on soft sticks with a language model as a second mutation operator (squishlings/llm.py, the setup
+# of Evolution through Large Models). Identical to sticks_map.yaml (seed, seeds, budget: 640 simulations) except
+# that half the children are the model's edit of their parent, so runs/sticks_map is the random-mutation baseline.
+# Needs ollama running with the model pulled (ollama pull qwen3.5:9b).
+#   squishlings evolve jobs/sticks_map_llm.yaml --jobs 8     # also writes llm.jsonl (every prompt answer)
+scenario: ../squishlings/creatures/base.yaml
+backend: mujoco
+genome:
+  encoding: sticks
+  tissues: [ecoflex_00_30, dragon_skin_10]
+  muscle: {groups: 4, frequency: [1 Hz, 12 Hz], amplitude: [2 kPa, 30 kPa], start: 0.3 s}
+  max_segments: 10
+  length: [8 mm, 30 mm]
+  radius: [3 mm, 7 mm]
+  mesh_size: 3 mm
+evolution: {method: map_elites, population: 32, offspring: 16, generations: 38, crossover: 0.3, seed: 3,
+            llm: {model: "qwen3.5:9b", rate: 0.5, examples: 3}}
+archive:
+  descriptors: [limbs, elongation]
+  bins: [6, 5]
+  ranges: [[0, 6], [-1, 3]]
+fitness: {metric: distance}
+seeds:
+  - ../squishlings/creatures/sticks/inchworm.txt
+  - ../squishlings/creatures/sticks/walker.txt
+  - ../squishlings/creatures/sticks/champion_1.txt
+output: ../runs/sticks_map_llm

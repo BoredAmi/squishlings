@@ -195,3 +195,66 @@ def test_tiny_map_elites_run(tmp_path):
         spec["archive"] = {"descriptors": ["cells"]}  # a voxel descriptor
         (tmp_path / "job.yaml").write_text(yaml.safe_dump(spec))
         Evolution(tmp_path / "job.yaml")
+
+
+def test_llm_answer_parsing(tmp_path):
+    from squishlings.llm import LLMMutator
+
+    mut = LLMMutator("fake", SPACE, tmp_path / "llm.jsonl")
+    parent = from_text(WALKER, SPACE)
+    good = "Idea: longer legs.\n```text\n" + WALKER.replace("len=14", "len=20") + "```"
+    child, info = mut.parse(good, parent)
+    assert info["status"] == "ok" and info["idea"] == "longer legs." and child.parents == (parent.key,)
+    assert mut.parse("Idea: same\n```text\n" + WALKER + "```", parent)[1]["status"] == "unchanged"
+    assert mut.parse("```text\nseg len=10 wings=3\n```", parent)[1]["status"] == "unparsed"
+    assert "travels 123 mm" in mut.prompt(parent, 0.123, {"limbs": 3.0}, [(parent, 0.2, {"limbs": 3.0})])
+
+
+def test_tiny_map_elites_run_with_fake_llm(tmp_path, monkeypatch):
+    pytest.importorskip("mujoco")
+    pytest.importorskip("gmsh")
+    import yaml
+
+    from squishlings import Evolution
+    from squishlings.llm import LLMMutator
+
+    calls = []
+
+    def fake_chat(self, prompt, seed):
+        calls.append(seed)
+        return "Idea: add a tail.\n```text\n" + WALKER.replace("---", "  seg len=12 r=3 mat=a yaw=180\n---") + "```"
+
+    monkeypatch.setattr(LLMMutator, "_chat", fake_chat)
+    creatures = __import__("pathlib").Path(__file__).resolve().parents[1] / "squishlings" / "creatures"
+    spec = {"scenario": str(creatures / "base.yaml"), "overrides": ["simulation.duration=0.1 s", "settle=0.05 s"],
+            "genome": {"encoding": "sticks", "tissues": ["ecoflex_00_30", "dragon_skin_10"],
+                       "muscle": {"groups": 2, "amplitude": ["2 kPa", "20 kPa"], "start": "0.05 s"},
+                       "max_segments": 6, "mesh_size": "4 mm"},
+            "evolution": {"method": "map_elites", "population": 2, "offspring": 2, "generations": 1, "seed": 0,
+                          "llm": {"model": "fake", "rate": 1.0}},
+            "archive": {"descriptors": ["limbs", "elongation"]},
+            "seeds": [str(creatures / "sticks" / "walker.txt")], "output": str(tmp_path / "out")}
+    (tmp_path / "job.yaml").write_text(yaml.safe_dump(spec))
+    report = Evolution(tmp_path / "job.yaml").run()
+    assert report["llm"]["proposed"] == 2 and report["llm"]["answers"]["ok"] >= 1 and len(calls) == 2
+    again = Evolution(tmp_path / "job.yaml")
+    report2 = again.run()  # answers come from llm.jsonl: no new calls, nothing simulated
+    assert len(calls) == 2 and again.n_simulated == 0 and report2["llm"] == report["llm"] | {
+        "answers": report2["llm"]["answers"]}
+
+
+def test_blown_up_creature_gets_worst_fitness(tmp_path):
+    import yaml
+
+    from squishlings import Evolution
+
+    creatures = __import__("pathlib").Path(__file__).resolve().parents[1] / "squishlings" / "creatures"
+    spec = {"scenario": str(creatures / "base.yaml"), "genome": {"encoding": "sticks"},
+            "fitness": {"max_height": "5 cm"}, "output": str(tmp_path / "out")}
+    (tmp_path / "job.yaml").write_text(yaml.safe_dump(spec))
+    ev = Evolution(tmp_path / "job.yaml")
+    g = from_text(WALKER, SPACE)
+    ev._done[g.key] = {"distance": 2.7, "final_max_z": 0.176}
+    assert ev.fitness(g) == -math.inf
+    ev._done[g.key] = {"distance": 0.4, "final_max_z": 0.03}
+    assert ev.fitness(g) == 0.4
