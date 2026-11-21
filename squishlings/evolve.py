@@ -33,6 +33,14 @@ bins) if the cell is empty or it beats the elite there. ``tournament`` is unused
 ``archive.png`` (best fitness per cell), ``elites/`` (every elite as a runnable scenario) and the archive in
 ``report.yaml`` (coverage, QD-score, cells). ``best/`` holds the fittest elites, which are of different kinds.
 
+Terrains (``terrains:``, :mod:`squishlings.terrain`): every creature is also run on a slope, ridges and/or sand-like
+ground, and its summary gains ``<terrain>/distance``, ``terrain_mean`` and ``terrain_min`` (use one as
+``fitness.metric``). With MAP-Elites, ``archive: {..., per_terrain: true}`` keeps one more archive per ground
+(``flat`` = ``distance``, and each terrain's distance) beside the main one, filled from the same simulations:
+the specialists of each ground next to the generalists. Parents are then drawn uniformly from the union of all
+the archives' elites. Each niche writes ``archive_<ground>.png`` and ``elites_<ground>/``; ``report.yaml`` gets
+``niches`` (coverage, QD-score, cells, the 3 best and the QD-score per batch).
+
 A language model as mutation operator (soft sticks with MAP-Elites, :mod:`squishlings.llm`)::
 
     evolution: {method: map_elites, ..., llm: {model: "qwen3.5:9b", rate: 0.5, examples: 3}}
@@ -79,14 +87,18 @@ from softsim.io import save_table
 from squishlings._jobs import code_hash
 from squishlings._jobs import content_hash as _hash
 from squishlings._jobs import process_pool as _process_pool
-from squishlings._jobs import run_summary as _run_summary
 from squishlings.build import MUSCLE_CHARS, TISSUE_CHARS, CreatureBuilder, genome_from_scenario
 from squishlings import genome as voxel_ops
 from squishlings import sticks as stick_ops
 from squishlings.genome import Genome, GenomeSpace
 from squishlings.sticks import StickGenome, StickSpace
+from squishlings.terrain import TerrainError, run_task
+from squishlings.terrain import max_height as terrain_max_height
+from squishlings.terrain import describe as describe_terrains
+from squishlings.terrain import parse as parse_terrains
 
-_JOB_FIELDS = {"scenario", "backend", "overrides", "genome", "evolution", "fitness", "seeds", "output", "archive"}
+_JOB_FIELDS = {"scenario", "backend", "overrides", "genome", "evolution", "fitness", "seeds", "output", "archive",
+               "terrains"}
 _GENOME_FIELDS = {"friction", "shape", "voxel", "tissues", "muscle", "min_cells", "max_cells", "fill", "muscle_fraction",
                   "subdivide", "cell_rate", "phase_sigma", "direction_rate", "scalar_sigma"}
 _MUSCLE_FIELDS = {"material", "groups", "frequency", "amplitude", "start"}
@@ -139,10 +151,10 @@ def _with_friction(raw: dict[str, Any], mu: float) -> dict[str, Any]:
 class _Voxels:
     """The voxel encoding (:mod:`squishlings.genome`, :mod:`squishlings.build`)."""
 
-    worker = staticmethod(_run_summary)
+    worker = staticmethod(run_task)
 
-    def __init__(self, space: GenomeSpace, builder: CreatureBuilder, base_dir: str):
-        self.space, self.builder, self.base_dir = space, builder, base_dir
+    def __init__(self, space: GenomeSpace, builder: CreatureBuilder, base_dir: str, terrains: dict):
+        self.space, self.builder, self.base_dir, self.terrains = space, builder, base_dir, terrains
         self.friction = builder.friction
 
     def random(self, rng): return voxel_ops.random_genome(self.space, rng)
@@ -158,25 +170,26 @@ class _Voxels:
         from squishlings.map_elites import voxel_descriptors
 
         return voxel_descriptors(g)
-    def task(self, g: Genome, name: str): return (self.builder.scenario(g, name), self.base_dir)
+    def task(self, g: Genome, name: str): return (self.builder.scenario(g, name), self.base_dir, self.terrains)
     def scenario(self, g: Genome, name: str) -> dict: return self.builder.scenario(g, name)
 
     def finer(self, best: dict, raw: dict):
         v = copy.deepcopy(raw)
         v["body"]["geometry"]["subdivide"] = 2 * int(v["body"]["geometry"].get("subdivide", 1))
-        return "subdivide_2", _run_summary, (v, self.base_dir)
+        return "subdivide_2", run_task, (v, self.base_dir, self.terrains)
 
 
 class _Sticks:
     """The soft-stick encoding (:mod:`squishlings.sticks`, :mod:`squishlings.sticks_mesh`)."""
 
     def __init__(self, space: StickSpace, base: dict, base_dir: str, output: Path, tissues: dict[str, Any],
-                 start: float, mesh_size: float, mesh_timeout: float):
+                 start: float, mesh_size: float, mesh_timeout: float, terrains: dict):
         from squishlings.sticks_mesh import run_sticks
 
         self.worker = run_sticks
         self.space, self.base, self.base_dir, self.output = space, base, base_dir, output
         self.tissues, self.start, self.mesh_size, self.mesh_timeout = tissues, start, mesh_size, mesh_timeout
+        self.terrains = terrains
         self.friction = float(base.get("ground", {}).get("friction", {}).get("sliding", 1.0))
 
     def random(self, rng): return stick_ops.random_genome(self.space, rng)
@@ -203,7 +216,7 @@ class _Sticks:
         size = self.mesh_size if size is None else size
         return {"text": g.text, "space": asdict(self.space), "base": self.base, "tissues": self.tissues,
                 "start": self.start, "mesh": str(self._msh(g.key, size)), "mesh_size": size,
-                "timeout": self.mesh_timeout, "base_dir": self.base_dir, "name": name}
+                "timeout": self.mesh_timeout, "base_dir": self.base_dir, "name": name, "terrains": self.terrains}
 
     def scenario(self, g: StickGenome, name: str) -> dict:
         from squishlings.sticks_mesh import scenario
@@ -262,6 +275,10 @@ class Evolution:
         if not 0 <= groups <= len(MUSCLE_CHARS):
             raise ConfigError(f"genome.muscle.groups: 0 to {len(MUSCLE_CHARS)}")
         self.output = (self.path.parent / spec.get("output", "evo_out")).resolve()
+        try:
+            self.terrains = parse_terrains(spec.get("terrains"))
+        except TerrainError as exc:
+            raise ConfigError(str(exc)) from exc
         if self.encoding == "sticks":
             self._init_sticks(gspec, mspec, base, tissues, groups)
         else:
@@ -282,7 +299,7 @@ class Evolution:
                            {TISSUE_CHARS[i]: card for i, card in enumerate(tissues)},
                            float(parse_quantity(mspec.get("start", "0.3 s"), "time")),
                            1e3 * float(parse_quantity(gspec.get("mesh_size", "3 mm"), "length")),
-                           float(gspec.get("mesh_timeout", 60)))
+                           float(gspec.get("mesh_timeout", 60)), self.terrains)
 
     def _init_voxels(self, gspec: dict, mspec: dict, base: dict, tissues: tuple, groups: int) -> None:
         shape = tuple(int(n) for n in gspec.get("shape", (6, 6, 4)))
@@ -301,7 +318,7 @@ class Evolution:
                                        int(gspec.get("subdivide", 1)),
                                        float(gspec.get("friction",
                                                        base.get("ground", {}).get("friction", {}).get("sliding", 0.8))))
-        self.enc = _Voxels(self.space, self.builder, self.base_dir)
+        self.enc = _Voxels(self.space, self.builder, self.base_dir, self.terrains)
 
     def _init_rest(self, spec: dict, scenario: Path, overrides: list, gspec: dict) -> None:
         espec = dict(spec.get("evolution") or {})
@@ -316,12 +333,17 @@ class Evolution:
         if self.method not in ("mu_plus_lambda", "map_elites"):
             raise ConfigError(f"evolution.method: 'mu_plus_lambda' or 'map_elites', got {self.method!r}")
         self.axes = None
+        self.niches: dict[str, str] = {}
         if self.method == "map_elites":
             from squishlings.map_elites import axes_from_spec
 
             aspec = dict(spec.get("archive") or {})
-            _check_keys(aspec, {"descriptors", "bins", "ranges"}, "archive")
+            _check_keys(aspec, {"descriptors", "bins", "ranges", "per_terrain"}, "archive")
             self.axes = axes_from_spec(aspec, set(self.enc.descriptors))
+            if aspec.get("per_terrain") and not self.terrains:
+                raise ConfigError("archive.per_terrain: needs a terrains block")
+            if aspec.get("per_terrain"):  # one more archive per ground: its specialists (same descriptors)
+                self.niches = {"flat": "distance", **{t: f"{t}/distance" for t in self.terrains}}
         elif spec.get("archive"):
             raise ConfigError("archive: only with evolution.method: map_elites")
         self.llm = None
@@ -342,7 +364,10 @@ class Evolution:
                                   url=str(lspec.get("url", "http://localhost:11434")),
                                   temperature=float(lspec.get("temperature", 0.8)),
                                   think=bool(lspec.get("think", False)),
-                                  timeout=float(lspec.get("timeout", 300)))
+                                  timeout=float(lspec.get("timeout", 300)),
+                                  **({"task": "crawl over varied ground. Fitness is the mean distance the centre "
+                                              "of mass travels in 2.7 s\non " + describe_terrains(self.terrains) + "."}
+                                     if self.terrains else {}))
             self.llm_counts = {"proposed": 0, "used": 0, "into_archive": 0}
         if min(self.population, self.offspring, self.tournament) < 1 or self.generations < 0:
             raise ConfigError("evolution: population, offspring and tournament >= 1, generations >= 0")
@@ -358,6 +383,7 @@ class Evolution:
 
         self._key_hash = _hash({"scenario": hashlib.sha256(scenario.read_bytes()).hexdigest(),
                                 "resolved": load_yaml(scenario), "code": code_hash(), "overrides": overrides,
+                                **({"terrains": self.terrains} if self.terrains else {}),
                                 "genome": {k: v for k, v in gspec.items() if k in
                                            ("voxel", "tissues", "muscle", "subdivide", "friction")}
                                 if self.encoding == "voxels" else
@@ -410,16 +436,19 @@ class Evolution:
                 f.write(json.dumps({"spec": self._key_hash, "key": k, "genome": self.enc.to_dict(g), "summary": summary},
                                    default=float) + "\n")
 
-    def fitness(self, g: Genome) -> float:
+    def fitness(self, g: Genome, metric: str | None = None) -> float:
+        metric = metric or self.metric
         summary = self._done[g.key]
         if "error" in summary:
             return -math.inf
-        if self.metric not in summary:
-            raise ConfigError(f"fitness metric {self.metric!r} is not in the scenario's summary; available: "
+        if metric not in summary:
+            if metric != self.metric:  # a terrain run that failed: no value for that ground
+                return -math.inf
+            raise ConfigError(f"fitness metric {metric!r} is not in the scenario's summary; available: "
                               f"{', '.join(sorted(summary))}")
-        if summary.get("final_max_z", 0.0) > self.max_height:
+        if terrain_max_height(summary) > self.max_height:
             return -math.inf
-        value = float(summary[self.metric])
+        value = float(summary[metric])
         return value - self.size_penalty * self.enc.size(g) if math.isfinite(value) else -math.inf
 
     # -- the loop ------------------------------------------------------------------------------------------------
@@ -479,6 +508,25 @@ class Evolution:
 
         rng = np.random.default_rng(self.seed)
         archive = Archive(self.axes, self.enc.describe)
+        niches = {n: Archive(self.axes, self.enc.describe) for n in self.niches}
+        self.niche_history: dict[str, list[dict[str, float]]] = {n: [] for n in niches}
+
+        def add_niches(genomes, gen):
+            for n, a in niches.items():
+                for g in genomes:
+                    a.add(g, self.fitness(g, self.niches[n]))
+                self.niche_history[n].append({"generation": gen, "cells": len(a.cells), "qd_score": a.qd_score,
+                                              "best": max((f for _, f, _ in a.cells.values()), default=0.0)})
+            if niches:
+                print("           niches: " + "  ".join(f"{n} {len(a.cells)} cells QD {a.qd_score:.3g}"
+                                                         for n, a in niches.items()), flush=True)
+
+        def parents():
+            if not niches:
+                return [g for _, g, _, _ in archive.elites()]
+            pool = {g.key: g for a in (archive, *niches.values()) for _, g, _, _ in a.elites()}
+            return [pool[k] for k in sorted(pool)]  # the union of every archive's elites, in a fixed order
+
         if self.jobs > 1:
             self._pool = _process_pool(self.jobs)
         try:
@@ -489,8 +537,9 @@ class Evolution:
             for g in pop:
                 archive.add(g, self.fitness(g))
             self._record_archive(0, archive)
+            add_niches(pop, 0)
             for gen in range(1, self.generations + 1):
-                elites = [g for _, g, _, _ in archive.elites()]
+                elites = parents()
                 children, from_llm = [], set()
                 for _ in range(self.offspring):
                     if not elites:  # nothing valid yet: keep sampling at random
@@ -511,6 +560,7 @@ class Evolution:
                 self._ensure(children)
                 entered = sum(archive.add(g, self.fitness(g)) and g.key in from_llm for g in children)
                 self._record_archive(gen, archive)
+                add_niches(children, gen)
                 if self.llm is not None:
                     self.llm_counts["used"] += len(from_llm)
                     self.llm_counts["into_archive"] += entered
@@ -518,12 +568,14 @@ class Evolution:
                           f"({self.llm.stats})", flush=True)
                 if gen % 5 == 0:
                     self._write_archive(archive)
+                    for n, a in niches.items():
+                        self._write_archive(a, n)
         finally:
             if self._pool is not None:
                 self._pool.shutdown()
                 self._pool = None
         ranked = sorted((g for _, g, _, _ in archive.elites()), key=lambda g: (-self.fitness(g), g.key))
-        return self._write(ranked, archive=archive)
+        return self._write(ranked, archive=archive, niches=niches)
 
     def _llm_child(self, parent, archive, seed: int):
         others = sorted((e for e in archive.elites() if e[1].key != parent.key), key=lambda e: (-e[2], e[1].key))
@@ -543,17 +595,20 @@ class Evolution:
               f"QD-score {archive.qd_score:.4g}  ({self.n_simulated} simulated, {len(self._done)} known)"
               if ranked else f"batch {generation:3d}: archive empty", flush=True)
 
-    def _write_archive(self, archive) -> dict[str, Any]:
+    def _write_archive(self, archive, niche: str | None = None) -> dict[str, Any]:
+        """The main archive (``archive.png``, ``elites/``) or a terrain niche's (``archive_<n>.png``,
+        ``elites_<n>/``)."""
         self.output.mkdir(parents=True, exist_ok=True)
-        archive.heatmap(self.output / "archive.png", self.metric)
-        elite_dir = self.output / "elites"
+        metric = self.niches[niche] if niche else self.metric
+        archive.heatmap(self.output / (f"archive_{niche}.png" if niche else "archive.png"), metric)
+        elite_dir = self.output / (f"elites_{niche}" if niche else "elites")
         elite_dir.mkdir(exist_ok=True)
         for old in elite_dir.glob("cell*.yaml"):
             old.unlink()
         for cell, g, f, d in archive.elites():
             raw = self.enc.scenario(g, f"creature_{g.key}")
             raw["description"] = (f"MAP-Elites elite {g.key} of cell {cell} "
-                                  f"({', '.join(f'{k} {v:.3g}' for k, v in d.items())}), {self.metric} {f:.4g}")
+                                  f"({', '.join(f'{k} {v:.3g}' for k, v in d.items())}), {metric} {f:.4g}")
             name = "cell" + "_".join(map(str, cell)) + f"_{g.key}.yaml"
             (elite_dir / name).write_text(f"# run with: softsim run {name}\n" + yaml.safe_dump(raw, sort_keys=False))
         return {"descriptors": [{"name": a.name, "range": [a.lo, a.hi], "bins": a.bins} for a in archive.axes],
@@ -575,10 +630,10 @@ class Evolution:
             dt = float(parse_quantity(raw["simulation"]["timestep"], "time"))
             name, fn, task = self.enc.finer(b, raw)
             variants = [(name, fn, task),
-                        ("half_timestep", _run_summary,
-                         (apply_overrides(raw, [f"simulation.timestep={dt / 2}"]), self.base_dir))]
+                        ("half_timestep", run_task,
+                         (apply_overrides(raw, [f"simulation.timestep={dt / 2}"]), self.base_dir, self.terrains))]
             if mu is not None:
-                variants += [(f"friction_x{k}", _run_summary, (_with_friction(raw, k * mu), self.base_dir))
+                variants += [(f"friction_x{k}", run_task, (_with_friction(raw, k * mu), self.base_dir, self.terrains))
                              for k in (0.8, 1.2)]
             for name, fn, task in variants:
                 tasks.append((fn, task))
@@ -610,7 +665,7 @@ class Evolution:
         print(f"generation {gen:3d}: best {fit[0]:.4g}  median {median:.4g}  "
               f"({self.n_simulated} simulated, {len(self._done)} known)", flush=True)
 
-    def _write(self, ranked: list[Genome], top: int = 5, archive=None) -> dict[str, Any]:
+    def _write(self, ranked: list[Genome], top: int = 5, archive=None, niches=None) -> dict[str, Any]:
         self.output.mkdir(parents=True, exist_ok=True)
         save_table(pd.DataFrame(self.history), self.output / "history.parquet")
         best_dir = self.output / "best"
@@ -633,10 +688,17 @@ class Evolution:
         report = {"job": str(self.path), "metric": self.metric, "size_penalty": self.size_penalty,
                   "generations": int(self.history[-1]["generation"]) if self.history else 0,
                   "evaluated": len(self._done), "simulated_this_run": self.n_simulated, "failed": failed,
-                  "rejected_too_high": sum(v.get("final_max_z", 0.0) > self.max_height for v in self._done.values()),
-                  "best": best}
+                  "rejected_too_high": sum(terrain_max_height(v) > self.max_height for v in self._done.values()),
+                  **({"terrains": self.terrains} if self.terrains else {}), "best": best}
         if archive is not None:
             report = {"method": "map_elites", **report, "archive": self._write_archive(archive)}
+        for n, a in (niches or {}).items():  # the specialists of each ground, best first
+            top3 = sorted(a.elites(), key=lambda e: (-e[2], e[1].key))[:3]
+            report.setdefault("niches", {})[n] = {
+                "metric": self.niches[n], **self._write_archive(a, n),
+                "best": [{"key": g.key, "fitness": f, "terrain_mean": self.fitness(g),
+                          "file": f"elites_{n}/cell{'_'.join(map(str, c))}_{g.key}.yaml"} for c, g, f, _ in top3],
+                "qd_history": self.niche_history[n]}
         if getattr(self, "llm", None) is not None:
             report["llm"] = {"model": self.llm.model, "rate": self.llm_rate, **self.llm_counts,
                              "answers": dict(self.llm.stats)}

@@ -26,14 +26,42 @@ def _replay(args: argparse.Namespace) -> int:
         print("error: give --gif FILE and/or --html FILE", file=sys.stderr)
         return 2
     run = Path(args.run)
-    records = (replay.record_best(run, args.best, args.set) if run.is_dir()
-               else [replay.record(run, run.stem, run.parent, args.set)])
+    if run.is_dir():
+        records = replay.record_best(run, args.best, args.set, args.terrain, args.niche)
+    elif args.terrain:
+        from softsim.config.loader import load_yaml
+
+        raw = replay.on_terrain(load_yaml(run), run.parent, args.terrain)
+        records = [replay.record(raw, f"{run.stem} on {args.terrain}", run.parent, args.set)]
+    else:
+        records = [replay.record(run, run.stem, run.parent, args.set)]
     for r in records:
         print(f"{r['name']}: distance {1e3 * r['summary'].get('distance', float('nan')):.1f} mm")
     if args.gif:
         print(replay.gif(records, args.gif))
     if args.html:
         print(replay.html(records, args.html, args.title))
+    return 0
+
+
+def _terrain(args: argparse.Namespace) -> int:
+    from softsim.config.loader import load_yaml
+
+    from squishlings.terrain import parse, transfer
+
+    terrains = parse(load_yaml(args.terrains)) if args.terrains else None
+    out = transfer(args.runs, args.top, terrains, args.jobs)
+    names = list(terrains or parse({"slope": None, "ridges": None, "sand": None}))
+    print(f"{'run':28s} {'#':>2s} {'flat':>7s} " + " ".join(f"{n:>13s}" for n in names) + f" {'mean':>7s}")
+    for run, rows in out.items():
+        for r in rows:
+            if "error" in r:
+                print(f"{Path(run).name:28s} {r['rank']:2d} error: {r['error'][:60]}")
+                continue
+            cells = " ".join(f"{1e3 * r[n]:6.0f} ({100 * r[n] / r['flat']:4.0f}%)" if r["flat"] else f"{1e3 * r[n]:13.0f}"
+                             for n in names)
+            print(f"{Path(run).name:28s} {r['rank']:2d} {1e3 * r['flat']:7.0f} {cells} {1e3 * r['mean']:7.0f}")
+    print("distances in mm; slope: uphill along the creature's own flat heading; % of its flat distance")
     return 0
 
 
@@ -77,7 +105,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--html", help="write a self-contained HTML player here")
     p.add_argument("--title", default="Squishlings", help="title of the HTML page")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE", help="override (repeatable)")
+    p.add_argument("--terrain", choices=["slope", "ridges", "sand"], help="replay on this terrain (default flat)")
+    p.add_argument("--niche", choices=["flat", "slope", "ridges", "sand"],
+                   help="the best of this ground's specialist archive (runs with archive.per_terrain)")
     p.set_defaults(func=_replay)
+
+    p = sub.add_parser("terrain", help="transfer test: re-run the best creatures of finished runs on every terrain")
+    p.add_argument("runs", nargs="+", help="evolve output directories")
+    p.add_argument("--top", type=int, default=3, help="how many of each run's best creatures")
+    p.add_argument("--jobs", type=int, default=1, help="simulations in parallel")
+    p.add_argument("--terrains", help="YAML {terrain: params} (default: slope, ridges and sand with defaults)")
+    p.set_defaults(func=_terrain)
 
     p = sub.add_parser("creatures", help="list the packaged creatures (seeds, champions) or copy them")
     p.add_argument("--copy", metavar="DIR", help="copy them to DIR")

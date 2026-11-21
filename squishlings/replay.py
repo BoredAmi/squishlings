@@ -71,14 +71,51 @@ def record(config: str | Path | dict[str, Any], name: str = "", base_dir: str | 
     stress = {lab: ts[f"muscle_{lab}_stress"].to_numpy()[idx] for lab in set(labels)
               if f"muscle_{lab}_stress" in ts}
     return {"name": name or sim.config.name, "t": t[idx], "x": result.vertices[body.name][idx], "tris": tris,
-            "labels": labels, "stress": stress, "summary": result.summary}
+            "labels": labels, "stress": stress, "summary": result.summary, "ground": _ground(sim.scene)}
 
 
-def record_best(run_dir: str | Path, n: int = 3, overrides: list[str] = ()) -> list[dict[str, Any]]:
+def _ground(scene) -> dict[str, Any]:
+    """How to draw the ground: ``rot`` turns world into display coordinates (gravity straight down: a tilted
+    gravity is a slope), ``boxes`` the obstacles (centre, half size), ``sand`` a compliant ground."""
+    g = np.asarray(scene.simulation.gravity, float)
+    a, b = -g / (np.linalg.norm(g) or 1.0), np.array([0.0, 0.0, 1.0])
+    v, cos = np.cross(a, b), float(a @ b)
+    k = np.array([[0, -v[2], v[1]], [v[2], 0, -v[0]], [-v[1], v[0], 0]])
+    rot = np.eye(3) + k + k @ k / (1 + cos) if cos > -1 + 1e-9 else np.diag([1.0, -1.0, -1.0])
+    ground = scene.ground
+    return {"rot": rot, "boxes": np.array([[*o.center, *o.half_size] for o in ground.obstacles]).reshape(-1, 6),
+            "sand": ground.compliance is not None}
+
+
+def on_terrain(raw: dict[str, Any], base_dir: str | Path, terrain: str, params: dict | None = None) -> dict[str, Any]:
+    """The creature's scenario on a terrain (:mod:`squishlings.terrain`; its flat run gives heading and footprint)."""
+    from squishlings._jobs import run_summary
+    from squishlings.terrain import apply, parse
+
+    flat = run_summary((raw, str(base_dir)))
+    if "error" in flat:
+        raise RuntimeError(f"flat run failed: {flat['error']}")
+    return apply(raw, terrain, parse({terrain: params})[terrain], flat)
+
+
+def record_best(run_dir: str | Path, n: int = 3, overrides: list[str] = (), terrain: str | None = None,
+                niche: str | None = None) -> list[dict[str, Any]]:
+    """The ``n`` best of a run (of its ``niche``'s archive: a ground's specialists, when given)."""
     report = load_yaml(Path(run_dir) / "report.yaml")
     base_dir = _base_dir(report)  # the creature files' relative paths are the job scenario's
-    return [record(load_yaml(Path(run_dir) / b["file"]), f"#{rank + 1}  {b['key']}  {report['metric']} "
-                   f"{b['fitness']:.4g}", base_dir, overrides) for rank, b in enumerate(report["best"][:n])]
+    best = report["best"]
+    if niche:
+        if niche not in report.get("niches", {}):
+            raise ValueError(f"no niche {niche!r} in this run; have {sorted(report.get('niches', {}))}")
+        best = report["niches"][niche]["best"]
+    out = []
+    for rank, b in enumerate(best[:n]):
+        raw = load_yaml(Path(run_dir) / b["file"])
+        if terrain:
+            raw = on_terrain(raw, base_dir, terrain, (report.get("terrains") or {}).get(terrain))
+        out.append(record(raw, f"#{rank + 1}  {b['key']}  {report['metric']} {b['fitness']:.4g}"
+                          + (f"  on {terrain}" if terrain else ""), base_dir, overrides))
+    return out
 
 
 def _base_dir(report: dict) -> Path:
@@ -105,38 +142,61 @@ def gif(records: list[dict[str, Any]], path: str | Path, elev: float = 25.0, azi
     light = np.array([-0.4, 0.5, 0.8]) / np.linalg.norm([-0.4, 0.5, 0.8])
     if window is None:
         window = max(float(np.ptp(r["x"][0][:, :2], axis=0).max()) for r in records) * 0.9
+    flat_ground = {"rot": np.eye(3), "boxes": np.zeros((0, 6)), "sand": False}
     n_frames = max(len(r["t"]) for r in records)
     images = []
     for k in range(n_frames):
         fig, axes = plt.subplots(1, len(records), figsize=(3.6 * len(records), 3.6), dpi=80, squeeze=False)
         for ax, r in zip(axes[0], records):
             i = min(k, len(r["t"]) - 1)
-            x = r["x"][i]
-            c = x.mean(axis=0)
-            g0 = np.floor((c[:2] - window) / 0.01) * 0.01
+            ground = r.get("ground") or flat_ground
+            view = rot @ ground["rot"]  # world -> display (gravity down) -> camera
+            xw = r["x"][i]
+            cw = xw.mean(axis=0)
+            g0 = np.floor((cw[:2] - window) / 0.01) * 0.01
+            if ground["sand"]:
+                quad = np.array([[cw[0] - window, cw[1] - window, 0], [cw[0] + window, cw[1] - window, 0],
+                                 [cw[0] + window, cw[1] + window, 0], [cw[0] - window, cw[1] + window, 0]]) @ view.T
+                ax.add_collection(PolyCollection([quad[:, :2]], facecolors=[(0.86, 0.76, 0.55)], edgecolors="none"))
             lines = []
-            for v in np.arange(g0[0], c[0] + window, 0.01):
-                lines.append([[v, c[1] - window, 0], [v, c[1] + window, 0]])
-            for v in np.arange(g0[1], c[1] + window, 0.01):
-                lines.append([[c[0] - window, v, 0], [c[0] + window, v, 0]])
-            lines = np.array(lines) @ rot.T
+            for v in np.arange(g0[0], cw[0] + window, 0.01):
+                lines.append([[v, cw[1] - window, 0], [v, cw[1] + window, 0]])
+            for v in np.arange(g0[1], cw[1] + window, 0.01):
+                lines.append([[cw[0] - window, v, 0], [cw[0] + window, v, 0]])
+            lines = np.array(lines) @ view.T
             ax.add_collection(LineCollection(lines[:, :, :2], colors=(0.6, 0.6, 0.6, 0.5), linewidths=0.5))
-            tri = x[r["tris"]]
-            p = tri @ rot.T
+            tri = xw[r["tris"]]
+            p = tri @ view.T
             n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
             n /= np.linalg.norm(n, axis=1, keepdims=True) + 1e-30
-            shade = 0.35 + 0.65 * np.clip((n @ rot.T) @ light, 0, 1)
+            shade = 0.35 + 0.65 * np.clip((n @ view.T) @ light, 0, 1)
             base = np.array([label_colour(lab) for lab in r["labels"]])
             for lab, s in r["stress"].items():  # contracting muscle: brighter
                 amp = max(np.abs(s).max(), 1e-12)
                 mask = np.array([q == lab for q in r["labels"]])
                 base[mask] = np.clip(base[mask] * (0.75 + 0.45 * max(s[i], 0) / amp), 0, 1)
             colours = np.clip(base * shade[:, None], 0, 1)
-            keep = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])[:, 2] > 0
-            order = np.argsort(p[keep][:, :, 2].mean(axis=1))
-            ax.add_collection(PolyCollection(p[keep][order][:, :, :2], facecolors=colours[keep][order],
-                                             edgecolors="none"))
-            cc = rot @ c
+            bq, bc = _box_faces(ground["boxes"], cw, window)
+            if len(bq):
+                bn = np.cross(bq[:, 1] - bq[:, 0], bq[:, 2] - bq[:, 0])
+                bn /= np.linalg.norm(bn, axis=1, keepdims=True) + 1e-30
+                bshade = 0.45 + 0.55 * np.clip((bn @ view.T) @ light, 0, 1)
+                bp = bq @ view.T
+                bkeep = np.cross(bp[:, 1] - bp[:, 0], bp[:, 2] - bp[:, 0])[:, 2] > 0
+                polys = list(p) + list(bp[bkeep])
+                cols = list(colours) + list(np.clip(bc[bkeep] * bshade[bkeep, None], 0, 1))
+                keep_all = np.concatenate([np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])[:, 2] > 0,
+                                           np.ones(int(bkeep.sum()), bool)])
+                depth = np.array([q[:, 2].mean() for q in polys])
+                order = [j for j in np.argsort(depth) if keep_all[j]]
+                ax.add_collection(PolyCollection([polys[j][:, :2] for j in order], facecolors=[cols[j] for j in order],
+                                                 edgecolors="none"))
+            else:
+                keep = np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0])[:, 2] > 0
+                order = np.argsort(p[keep][:, :, 2].mean(axis=1))
+                ax.add_collection(PolyCollection(p[keep][order][:, :, :2], facecolors=colours[keep][order],
+                                                 edgecolors="none"))
+            cc = view @ cw
             ax.set_xlim(cc[0] - window, cc[0] + window)
             ax.set_ylim(cc[1] - 0.7 * window, cc[1] + 0.7 * window)
             ax.set_aspect("equal")
@@ -153,7 +213,32 @@ def gif(records: list[dict[str, Any]], path: str | Path, elev: float = 25.0, azi
     return path
 
 
+def _box_faces(boxes: np.ndarray, centre: np.ndarray, window: float) -> tuple[np.ndarray, np.ndarray]:
+    """The obstacle boxes' faces (quads, outward winding) cut to the square around ``centre``, and their colour."""
+    quads = []
+    for cx, cy, cz, hx, hy, hz in boxes:
+        lo = np.array([max(cx - hx, centre[0] - window), max(cy - hy, centre[1] - window), cz - hz])
+        hi = np.array([min(cx + hx, centre[0] + window), min(cy + hy, centre[1] + window), cz + hz])
+        if (hi[:2] <= lo[:2]).any():
+            continue
+        (x0, y0, z0), (x1, y1, z1) = lo, hi
+        quads += [[[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],   # top
+                  [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],   # -y
+                  [[x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]],   # +y
+                  [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],   # -x
+                  [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]]]   # +x
+    q = np.array(quads, float).reshape(-1, 4, 3)
+    return q, np.tile([0.55, 0.6, 0.55], (len(q), 1))
+
+
 # -- HTML ------------------------------------------------------------------------------------------------------------
+def _ground_json(ground: dict[str, Any] | None) -> dict[str, Any]:
+    if ground is None:
+        return {"rot": np.eye(3).ravel().tolist(), "boxes": [], "sand": False}
+    return {"rot": [round(float(v), 6) for v in np.ravel(ground["rot"])],
+            "boxes": [[round(float(v), 5) for v in b] for b in ground["boxes"]], "sand": bool(ground["sand"])}
+
+
 def _b64(a: np.ndarray) -> str:
     return base64.b64encode(np.ascontiguousarray(a).tobytes()).decode()
 
@@ -171,7 +256,8 @@ def html(records: list[dict[str, Any]], path: str | Path, title: str = "Soft cre
             "labels": labels, "colours": [label_colour(q) for q in labels],
             "stress": {q: [round(float(v), 2) for v in s] for q, s in r["stress"].items()},
             "summary": {k: float(v) for k, v in r["summary"].items() if k in
-                        ("distance", "mean_speed", "max_tilt", "turn")}})
+                        ("distance", "mean_speed", "max_tilt", "turn")},
+            "ground": _ground_json(r.get("ground"))})
     data = json.dumps(creatures)
     page = _HTML.replace("__TITLE__", title).replace("__DATA__", data)
     if fragment:  # the page's content only, for hosts that wrap it in their own document (no doctype/html/head/body)
@@ -228,19 +314,28 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x666666, 1.6));
 const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(-0.3, -0.5, 1); scene.add(sun);
 const gridColour = new THREE.Color(css.getPropertyValue("--grid").trim());
 const grid = new THREE.GridHelper(1, 100, gridColour, gridColour); grid.rotation.x = Math.PI / 2;
-grid.material.transparent = true; grid.material.opacity = 0.35; scene.add(grid);
+grid.material.transparent = true; grid.material.opacity = 0.35;
+const world = new THREE.Group(); world.matrixAutoUpdate = false; scene.add(world); world.add(grid);
+const sand = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshStandardMaterial({color: 0xdcc28c, roughness: 1}));
+sand.position.z = -1e-4; world.add(sand);
+const ridgeMat = new THREE.MeshStandardMaterial({color: 0x8c9a8c, roughness: 0.9}); let ridges = new THREE.Group(); world.add(ridges);
 let mesh = null, cur = null, frame = 0, last = 0, acc = 0;
 let playing = !matchMedia("(prefers-reduced-motion: reduce)").matches;
 document.getElementById("play").textContent = playing ? "Pause" : "Play";
 const pick = document.getElementById("pick"), slider = document.getElementById("time");
 DATA.forEach((c, i) => pick.add(new Option(c.name, i)));
 function load(i) {
-  cur = DATA[i]; if (mesh) { scene.remove(mesh); mesh.geometry.dispose(); }
+  cur = DATA[i]; if (mesh) { world.remove(mesh); mesh.geometry.dispose(); }
+  const R = cur.ground.rot; world.matrix.set(R[0], R[1], R[2], 0, R[3], R[4], R[5], 0, R[6], R[7], R[8], 0, 0, 0, 0, 1);
+  world.matrixWorldNeedsUpdate = true; sand.visible = cur.ground.sand;
+  world.remove(ridges); ridges.traverse(o => o.geometry && o.geometry.dispose()); ridges = new THREE.Group(); world.add(ridges);
+  for (const [x, y, z, hx, hy, hz] of cur.ground.boxes) {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(2 * hx, 2 * hy, 2 * hz), ridgeMat); b.position.set(x, y, z); ridges.add(b); }
   const nt = cur.T.length / 3, g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.BufferAttribute(new Float32Array(nt * 9), 3));
   g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(nt * 9), 3));
   mesh = new THREE.Mesh(g, new THREE.MeshStandardMaterial({vertexColors: true, flatShading: true, roughness: 0.7}));
-  scene.add(mesh); frame = 0; slider.max = cur.t.length - 1; setFrame(0, true);
+  world.add(mesh); frame = 0; slider.max = cur.t.length - 1; setFrame(0, true);
   const s = cur.summary, f = v => v === undefined ? "–" : v;
   document.getElementById("stats").textContent =
     `distance ${(1000 * f(s.distance)).toFixed(1)} mm · speed ${(1000 * f(s.mean_speed)).toFixed(1)} mm/s · max tilt ${(f(s.max_tilt) * 57.2958).toFixed(0)}° · turn ${(f(s.turn) * 57.2958).toFixed(0)}°`;
@@ -263,10 +358,10 @@ function setFrame(k, recentre) {
   }
   mesh.geometry.attributes.position.needsUpdate = true; mesh.geometry.attributes.color.needsUpdate = true;
   mesh.geometry.computeVertexNormals();
-  const shift = new THREE.Vector3(cx, cy, cz).sub(controls.target);
-  if (recentre) { camera.position.set(cx + 0.09, cy - 0.12, cz + 0.08); controls.target.set(cx, cy, cz); }
+  const v = new THREE.Vector3(cx, cy, cz).applyMatrix4(world.matrix); const shift = v.clone().sub(controls.target);
+  if (recentre) { camera.position.set(v.x + 0.09, v.y - 0.12, v.z + 0.08); controls.target.copy(v); }
   else { controls.target.add(shift); camera.position.add(shift); }
-  grid.position.set(Math.round(cx * 100) / 100, Math.round(cy * 100) / 100, 0);
+  grid.position.set(Math.round(cx * 100) / 100, Math.round(cy * 100) / 100, 0); sand.position.x = grid.position.x; sand.position.y = grid.position.y;
   document.getElementById("clock").textContent = `${cur.t[k].toFixed(2)} s`;
 }
 pick.onchange = () => load(+pick.value);

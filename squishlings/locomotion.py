@@ -12,7 +12,8 @@ vertical) and ``yaw`` (heading of its x axis).
 Summary: ``distance`` (planar displacement of the centre of mass from ``settle`` to the end) and its ``distance_x``,
 ``distance_y``; ``mean_speed`` (distance per second of gait); ``path_length`` (planar path of the centre of mass,
 from the output samples); ``max_tilt``, ``final_tilt``, ``turn`` (yaw change over the gait); ``flipped`` (1 when
-the body turned over, tilt > 90 deg, at any time).
+the body turned over, tilt > 90 deg, at any time); ``footprint`` (the largest horizontal distance of a rest vertex
+from the rest centre of mass at ``rest_com_x/y``: terrain keeps a square of that half-size clear, :mod:`terrain`).
 """
 
 from __future__ import annotations
@@ -90,5 +91,8 @@ class LocomotionScenario(InflationScenario):
                    path_length=float(np.linalg.norm(np.diff(xy, axis=0), axis=1).sum()),
                    max_tilt=float(ts["tilt"].max()), final_tilt=float(ts["tilt"].iloc[-1]),
                    turn=float(yaw[-1] - yaw[0]), flipped=float(ts["tilt"].max() > np.pi / 2))
+        c0 = self._weights @ self._rest
+        out.update(rest_com_x=float(c0[0]), rest_com_y=float(c0[1]),
+                   footprint=float(np.linalg.norm(self._rest[:, :2] - c0[:2], axis=1).max()))
         return out
 

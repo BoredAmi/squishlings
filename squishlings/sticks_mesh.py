@@ -197,7 +197,12 @@ def run_sticks(task: dict[str, Any]) -> dict[str, Any]:
     tets = json.loads(regions.read_text())
     raw = scenario(g, msh, place(g), set(tets), task["base"], task["tissues"], task["start"])
     raw["name"] = task["name"]
-    summary = run_summary((raw, task["base_dir"]))
+    if task.get("terrains"):
+        from squishlings.terrain import evaluate
+
+        summary = evaluate(raw, task["base_dir"], task["terrains"])
+    else:
+        summary = run_summary((raw, task["base_dir"]))
     if "error" not in summary:
         summary["tets"] = float(sum(tets.values()))
     return summary

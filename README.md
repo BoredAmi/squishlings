@@ -110,15 +110,44 @@ squishlings evolve jobs/sticks_map_llm.yaml --jobs 8   # ~9 h; resumable, every 
 
 In a job, set `evolution: {method: map_elites, ..., llm: {model: "qwen3.5:9b", rate: 0.5, examples: 3}}`.
 
+## Terrain
+
+Every creature above was evolved on one flat, rigid plane. `squishlings terrain` re-runs finished runs' best
+creatures on three harder grounds (`squishlings/terrain.py`; softsim 0.2.0's ground obstacles and compliance):
+
+- **slope:** 8°, climbed uphill along the creature's own heading on flat ground (sliding back scores negative);
+- **ridges:** a lattice of 3 mm high, 6 mm wide ridges every 40 mm in x and y, the start left clear;
+- **sand:** a soft, damped ground (contact time constant 20 ms: a resting block sinks about 3 mm). This is soft
+  contact, not granular physics: no grains, no displaced material.
+
+The top 3 of each flat MAP-Elites run (9 per arm), as % of each creature's own flat distance (averages):
+
+| Arm | Slope | Ridges | Sand | Mean distance over the 4 grounds |
+| --- | --- | --- | --- | --- |
+| random | 42% | 51% | 27% | 512 mm |
+| random + LLM | **76%** | 49% | 35% | **786 mm** |
+
+Three of the nine random champions slide backwards on the slope; every LLM champion keeps climbing (59–104%).
+Ridges are a tie, and sand varies from 5% to 104% in both arms. One LLM creature (seed 3, #2) keeps about 100% on
+every ground. These are 9 creatures per arm, and the creatures of one run are not independent. Per creature:
+`runs/*/terrain.yaml`.
+
+Next, evolution on all four grounds: `jobs/sticks_terrain.yaml` and `sticks_terrain_llm.yaml` score each creature
+on the mean distance (`terrains:`, `fitness: {metric: terrain_mean}`) and, with `archive: {per_terrain: true}`,
+keep a specialist archive per ground beside the generalists, from the same simulations. Each creature costs four
+simulations, so a run takes about 4× as long.
+
 ## Quick start
 
 ```bash
-pip install -e .                                    # needs softsim >= 0.2.0 (voxel bodies and muscles), gmsh
+pip install -e .                                    # needs softsim >= 0.2.0 (voxels, muscles, terrain), gmsh
 squishlings creatures                               # the packaged seeds and champions
 softsim run squishlings/creatures/champion_1.yaml   # run one; any softsim command works on a creature
 squishlings evolve jobs/sticks_map.yaml --jobs 8    # evolve (resumable)
 squishlings evolve jobs/sticks_map.yaml --check 3 --jobs 8   # exploit check of the 3 best
 squishlings replay runs/sticks_map --best 3 --gif best.gif --html best.html
+squishlings terrain runs/sticks_map --top 3 --jobs 8         # the best 3 on slope, ridges and sand
+squishlings replay runs/sticks_map --best 1 --terrain ridges --gif ridges.gif
 ```
 
 If `squishlings` is installed in softsim's virtual environment, activate it first
@@ -223,17 +252,19 @@ The design notes, the spike, and the problems found while building the soft stic
 | `squishlings/sticks.py` | soft sticks: the text genome, its operators and repair |
 | `squishlings/sticks_mesh.py` | soft sticks → gmsh mesh with muscle regions → softsim scenario |
 | `squishlings/llm.py` | the language-model mutation operator (ollama) |
+| `squishlings/terrain.py` | slope, ridges and sand: scoring a creature on them, the transfer test |
 | `squishlings/map_elites.py` | MAP-Elites: descriptors, the archive, its heatmap |
 | `squishlings/evolve.py` | the evolution loop ((μ+λ) and MAP-Elites) and the exploit check |
 | `squishlings/genome.py`, `build.py` | voxels: the encoding, its operators, genome ↔ softsim scenario |
 | `squishlings/locomotion.py` | the `locomotion` scenario (registered with softsim) |
 | `squishlings/replay.py` | GIF and HTML replays |
 | `squishlings/creatures/` | seeds and champions: voxels (`*.yaml`), soft sticks (`sticks/*.txt`) |
-| `jobs/` | `crawler*.yaml` (voxels), `sticks.yaml` ((μ+λ)), `sticks_map.yaml` (MAP-Elites), `sticks_map_llm.yaml` (MAP-Elites + LLM) |
+| `jobs/` | `crawler*.yaml` (voxels), `sticks.yaml` ((μ+λ)), `sticks_map.yaml` (MAP-Elites), `sticks_map_llm.yaml` (MAP-Elites + LLM), `sticks_terrain*.yaml` (on all four grounds) |
 | `spikes/` | the soft-stick feasibility spike |
 
 ## Next
 
+- The terrain runs: generalists and per-ground specialists, random vs LLM.
 - Voxels × {random, LLM} for the full 2 × 2 comparison; a larger model as the operator.
 - A lower frequency cap (about 6 Hz) to rule out buzzing gaits.
 - Neural controllers reading touch and strain sensors instead of open-loop oscillators (Framsticks' brains).

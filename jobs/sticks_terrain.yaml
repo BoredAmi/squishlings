@@ -1,0 +1,33 @@
+# Generalists: MAP-Elites on soft sticks as in sticks_map.yaml (same seed, seeds and budget: 640 creatures), but each
+# creature is scored on the mean distance over flat ground, an 8 degree slope (uphill), 3 mm ridges and sand-like
+# soft ground (README, "Terrain"), with a specialist archive per ground beside it (per_terrain). Four simulations
+# per creature, so about 4x the time of sticks_map.yaml.
+#   squishlings evolve jobs/sticks_terrain.yaml --jobs 8
+#   squishlings evolve jobs/sticks_terrain.yaml --check 3 --jobs 8
+#   squishlings replay runs/sticks_terrain --best 1 --terrain ridges --gif ridges.gif
+scenario: ../squishlings/creatures/base.yaml
+backend: mujoco
+genome:
+  encoding: sticks
+  tissues: [ecoflex_00_30, dragon_skin_10]
+  muscle: {groups: 4, frequency: [1 Hz, 12 Hz], amplitude: [2 kPa, 30 kPa], start: 0.3 s}
+  max_segments: 10
+  length: [8 mm, 30 mm]
+  radius: [3 mm, 7 mm]
+  mesh_size: 3 mm
+evolution: {method: map_elites, population: 32, offspring: 16, generations: 38, crossover: 0.3, seed: 3}
+archive:
+  descriptors: [limbs, elongation]
+  bins: [6, 5]
+  ranges: [[0, 6], [-1, 3]]
+  per_terrain: true            # also the best of each kind on each ground alone (archive_<ground>.png)
+terrains:                     # each creature: flat ground, then these three (squishlings/terrain.py)
+  slope: {angle: 8 deg}       # uphill along its own flat heading
+  ridges: {height: 3 mm, width: 6 mm, spacing: 40 mm, extent: 1.5 m}
+  sand: {timeconst: 20 ms}    # soft damped ground, sinks about 3 mm
+fitness: {metric: terrain_mean}
+seeds:
+  - ../squishlings/creatures/sticks/inchworm.txt
+  - ../squishlings/creatures/sticks/walker.txt
+  - ../squishlings/creatures/sticks/champion_1.txt
+output: ../runs/sticks_terrain

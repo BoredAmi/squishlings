@@ -23,8 +23,9 @@ from typing import Any
 
 from squishlings.sticks import ParseError, StickGenome, StickSpace, from_text
 
-_RULES = """You design soft robots made of silicone capsules (sticks) that crawl on flat ground. Fitness is the
-distance the centre of mass travels in 2.7 s. Each robot is a tree of segments, written one per line:
+FLAT_TASK = "crawl on flat ground. Fitness is the\ndistance the centre of mass travels in 2.7 s."
+
+_RULES = """You design soft robots made of silicone capsules (sticks) that {task} Each robot is a tree of segments, written one per line:
 
   seg len=<mm> r=<mm> mat=<a|b> [yaw=<deg>] [pitch=<deg>] [muscle=<1..{n_muscles}> [bend [roll=<deg>]]] [sym]
 
@@ -68,6 +69,7 @@ class LLMMutator:
     temperature: float = 0.8
     timeout: float = 300.0
     think: bool = False
+    task: str = FLAT_TASK  # what the robot is scored on: the start of the system prompt (terrain jobs change it)
     stats: dict[str, int] = field(default_factory=lambda: {"ok": 0, "unparsed": 0, "unchanged": 0, "error": 0,
                                                             "cached": 0})
 
@@ -81,7 +83,7 @@ class LLMMutator:
                     self._answers[row["id"]] = row
         s = self.space
         self._system = _RULES.format(
-            n_muscles=s.n_muscles, len_lo=s.length[0], len_hi=s.length[1], r_lo=s.radius[0], r_hi=s.radius[1],
+            task=self.task, n_muscles=s.n_muscles, len_lo=s.length[0], len_hi=s.length[1], r_lo=s.radius[0], r_hi=s.radius[1],
             p_lo=s.pitch[0], p_hi=s.pitch[1], max_segments=s.max_segments, max_depth=s.max_depth,
             f_lo=s.frequency[0], f_hi=s.frequency[1], a_lo=s.amplitude[0], a_hi=s.amplitude[1])
 
