@@ -82,6 +82,20 @@ batch take 12 minutes, so the model costs almost nothing.
 *The same creatures as at the top, 0.4 s of gait in 10× slow motion. At 10-12 Hz the normal-speed GIFs cannot
 show a stride; this one can.*
 
+The other two seeds. Seed 4, where the LLM's lead is largest:
+
+![Seed 4: the best creature of random evolution next to the two best with the LLM](docs/media/seed4_llm_vs_random.gif)
+
+Seed 5, where random mutation found the faster champion. The LLM's two best are close relatives that landed in
+neighbouring cells (5+ and 4 limbs):
+
+![Seed 5: the best creature of random evolution next to the two best with the LLM](docs/media/seed5_llm_vs_random.gif)
+
+Quality-diversity in one run: the best 2-, 3-, 4- and 6-limbed creatures of seed 4 with the LLM, each a different
+body plan that walks:
+
+![The best 2-, 3-, 4- and 6-limbed creatures of one LLM run](docs/media/llm_kinds_seed4.gif)
+
 | Random mutation | Random + LLM |
 | --- | --- |
 | ![Archive of the random-mutation run](docs/media/archive_random.png) | ![Archive of the LLM run](docs/media/archive_llm.png) |
