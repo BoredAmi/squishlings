@@ -26,41 +26,49 @@ same starting creatures, same 640 simulations.*
 
 ## Results so far
 
-All distances are the centre of mass travelled in 2.7 s after settling, on MuJoCo (2026-11-17 to 11-20, one PC,
-8 cores).
+All distances are the centre of mass travelled in 2.7 s after settling, on MuJoCo (2026-11-17 to 11-21; one PC
+with 8 threads, seed 5 on a second PC with 20).
 
 | Run | Encoding, method | Simulations | Best | Exploit check |
 | --- | --- | --- | --- | --- |
 | `crawler_fine` | voxels, (μ+λ) | 208 | 683 mm | −13% to −26% on a finer mesh |
 | `sticks` (first run) | sticks, (μ+λ), ≤ 8 Hz, ≤ 15 kPa | 336 | 393 mm | within 16% |
 | `sticks` (second run) | sticks, (μ+λ), ≤ 12 Hz, ≤ 30 kPa | 496 | 1412 mm | within 9%, but it buzzes (below) |
-| `sticks_map` | sticks, MAP-Elites, random mutation | 640 | 1123 mm | |
-| `sticks_map_llm` | sticks, MAP-Elites, random + LLM | 640 | **1618 mm** | within 3%, friction ×1.2: −23% |
+| `sticks_map` (seeds 3, 4, 5) | sticks, MAP-Elites, random mutation | 640 each | 1123, 953, 1290 mm | champions within 5%; 2 of 9 top-3 flagged |
+| `sticks_map_llm` (seeds 3, 4, 5) | sticks, MAP-Elites, random + LLM | 640 each | **1618**, **1400**, 1213 mm | champions within 23%; 1 of 9 top-3 flagged |
 
 ## A language model in the loop
 
 The question (from Prof. Jakub Bernat): can an LLM propose changes to a robot's geometry, with an evolutionary
 algorithm keeping the better ones and a simulator judging them? Here is the first experiment.
 
-**Setup.** Two MAP-Elites runs, identical (seed, starting creatures, 38 batches of 16 children) except that in
-`sticks_map_llm` each child has a 50% chance to be written by `qwen3.5:9b` instead of by crossover and random
+**Setup.** Pairs of MAP-Elites runs, identical (seed, starting creatures, 38 batches of 16 children) except that
+in `sticks_map_llm` each child has a 50% chance to be written by `qwen3.5:9b` instead of by crossover and random
 mutation. The model sees the encoding rules, the parent, its distance and kind of body, and the three best other
-elites, and answers with one line of reasoning and a complete new genome.
+elites, and answers with one line of reasoning and a complete new genome. Three seeds per arm.
 
-![QD-score and best distance per batch, random mutation against random + LLM](docs/media/llm_vs_random.png)
+![QD-score per batch for three seeds: random mutation against random + LLM](docs/media/qd_seeds.png)
 
 | After 640 simulations | Random mutation | Random + LLM |
 | --- | --- | --- |
-| QD-score (sum of the elites' distances) | 9.85 m | **12.29 m** (+25%) |
-| Best distance | 1123 mm | **1618 mm** (+44%) |
-| Cells filled (of 30) | 27 | 27 |
+| QD-score (sum of the elites' distances), seeds 3 / 4 / 5 | 9.85 / 7.46 / 8.15 m | **12.29 / 12.46 / 12.24 m** |
+| QD-score, mean | 8.49 m | **12.33 m (+45%)** |
+| Best distance, seeds 3 / 4 / 5 | 1123 / 953 / **1290** mm | **1618 / 1400** / 1213 mm |
+| Cells filled (of 30), seeds 3 / 4 / 5 | 27 / 25 / 27 | 27 / 26 / 27 |
 
-**The model is a reliable operator.** It wrote 297 children: 5 answers did not parse (it wrote `1.2+pi` as a
-phase, for example) and 3 changed nothing; those fell back to random mutation. 58 of its children (20%) entered
-the archive. A 9B model on an RTX 3060 answers in about 7 s, while the simulations of a batch take 12 minutes, so
-the model costs almost nothing.
+**The LLM wins on quality-diversity in every seed** (+25%, +67%, +50%) and lands in the same place each time
+(12.2–12.5 m), while random mutation spreads from 7.5 to 9.9 m. The single best creature is better with the LLM in
+two seeds of three: seed 5's random run found a 1290 mm walker. So the claim is "more good bodies of more
+kinds", not "always a faster champion". All six champions pass the exploit check. Among the top three of each
+run, one of nine LLM creatures is flagged (+51% with half the time step, seed 3) and two of nine random ones
+(−78% under one variant in seed 4, +33% on a finer mesh in seed 5).
 
-**It makes the big jumps; random mutation tunes them.** The champion's lineage:
+**The model is a reliable operator.** Over the three seeds it wrote 880 children: 27 answers did not parse (it
+wrote `1.2+pi` as a phase, for example) and 5 changed nothing; those fell back to random mutation. 165 of its
+children (19%) entered the archive. A 9B model on an RTX 3060 answers in about 7 s, while the simulations of a
+batch take 12 minutes, so the model costs almost nothing.
+
+**It makes the big jumps; random mutation tunes them.** The seed 3 champion's lineage:
 
 ![The champion's lineage: random mutation, then the LLM's redesign, then random tuning](docs/media/llm_lineage.gif)
 
@@ -78,9 +86,8 @@ show a stride; this one can.*
 | --- | --- |
 | ![Archive of the random-mutation run](docs/media/archive_random.png) | ![Archive of the LLM run](docs/media/archive_llm.png) |
 
-**How far this goes.** One seed per arm: a strong first result, not yet proof. The next step is two more seeds for
-each arm. Both champions sit at the muscle limits (12 Hz, 30 kPa), and the model can only edit what the encoding
-can say.
+**How far this goes.** Three seeds per arm, one task, one encoding, one model: consistent, but small. The
+champions sit at the muscle limits (12 Hz, 30 kPa), and the model can only edit what the encoding can say.
 
 ```bash
 ollama pull qwen3.5:9b
@@ -213,7 +220,7 @@ The design notes, the spike, and the problems found while building the soft stic
 
 ## Next
 
-- Two more seeds for each arm of the LLM experiment, then voxels × {random, LLM} for the full 2 × 2 comparison.
+- Voxels × {random, LLM} for the full 2 × 2 comparison; a larger model as the operator.
 - A lower frequency cap (about 6 Hz) to rule out buzzing gaits.
 - Neural controllers reading touch and strain sensors instead of open-loop oscillators (Framsticks' brains).
 - Turning muscle groups into buildable chambers and cables.
