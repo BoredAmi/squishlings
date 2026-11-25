@@ -12,6 +12,22 @@ every creature is a soft solid.
 the two best when a local language model (qwen3.5:9b) writes half of the children (1618 mm, 1380 mm). Same seed,
 same starting creatures, same 640 simulations.*
 
+![The best sand specialist of random evolution, with qwen3.5:9b and with Claude Opus 5.5](docs/media/terrain_sand_3arms.gif)
+
+*On soft sand-like ground: the best of random evolution (180 mm), with qwen3.5:9b (432 mm) and with Claude Opus 5.5
+(699 mm) writing half of the children. See [Terrain](#terrain).*
+
+**Findings so far** (MAP-Elites, 640 creatures per run, details below):
+
+- **A language model as a mutation operator beats random mutation alone.** On flat ground, a local 9B model raised
+  the QD-score by 45% (three seeds); its champions also climb a slope far better than random ones.
+- **Evolved on four grounds, the stronger model finds the best creatures, the weaker one the most kinds.** Claude
+  Opus 5.5 found the best generalist (701 mm against 502 mm with qwen3.5:9b and 383 mm with random mutation) and
+  the best specialist on every ground. qwen3.5:9b filled the archives better (QD-score 5.3 against 4.1 and 3.2).
+  Opus kept refining one four-legged design. One seed so far.
+- **Every champion is checked for numerical exploits** (finer mesh, half time step, friction ±20%). Most pass.
+  Those that don't are flagged in the results, Opus's best among them.
+
 ## What is in here
 
 - **Two body encodings.** *Voxels*: a grid of 1 cm cubes of tissue and muscle. *Soft sticks*: a tree of silicone
@@ -19,15 +35,17 @@ same starting creatures, same 640 simulations.*
 - **Two search methods.** A (μ+λ) evolution strategy, and MAP-Elites, which keeps the best creature of each kind
   of body instead of one ranked population.
 - **A language model as a mutation operator.** The stick genome is plain text, so an LLM can read a parent and
-  write an edited one ([Evolution through Large Models](https://arxiv.org/abs/2206.08896), run offline on
-  [ollama](https://ollama.com)).
+  write an edited one ([Evolution through Large Models](https://arxiv.org/abs/2206.08896)): a local model on
+  [ollama](https://ollama.com), or Claude Opus 5.5 through Claude Code.
+- **Four grounds.** Flat, an 8° slope, a lattice of low ridges and soft sand-like ground. Creatures can be scored
+  on the mean over all four, with one specialist archive per ground on the side.
 - **An exploit check.** Evolution finds numerical artefacts as eagerly as gaits, so every champion is re-run on a
   finer mesh, with half the time step, and with friction ±20%.
 
 ## Results so far
 
-All distances are the centre of mass travelled in 2.7 s after settling, on MuJoCo (2026-11-17 to 11-21; one PC
-with 8 threads, seed 5 on a second PC with 20).
+All distances are the centre of mass travelled in 2.7 s after settling, on MuJoCo (2026-11-17 to 11-24; one PC
+with 8 threads, seed 5 and the terrain runs on a second PC with 20).
 
 | Run | Encoding, method | Simulations | Best | Exploit check |
 | --- | --- | --- | --- | --- |
@@ -36,6 +54,9 @@ with 8 threads, seed 5 on a second PC with 20).
 | `sticks` (second run) | sticks, (μ+λ), ≤ 12 Hz, ≤ 30 kPa | 496 | 1412 mm | within 9%, but it buzzes (below) |
 | `sticks_map` (seeds 3, 4, 5) | sticks, MAP-Elites, random mutation | 640 each | 1123, 953, 1290 mm | champions within 5%; 2 of 9 top-3 flagged |
 | `sticks_map_llm` (seeds 3, 4, 5) | sticks, MAP-Elites, random + LLM | 640 each | **1618**, **1400**, 1213 mm | champions within 23%; 1 of 9 top-3 flagged |
+| `sticks_terrain` (seed 3) | sticks, MAP-Elites on 4 grounds, random | 640 × 4 | 383 mm mean | 2 of top 3 flagged |
+| `sticks_terrain_llm` (seed 3) | … + qwen3.5:9b | 639 × 4 | 502 mm mean | 1 of top 3 flagged |
+| `sticks_terrain_claude` (seed 3) | … + Claude Opus 5.5 | 623 × 4 | **701** mm mean | 2 of top 3 flagged; #2 (693 mm) passes |
 
 ## A language model in the loop
 
@@ -132,10 +153,83 @@ Ridges are a tie, and sand varies from 5% to 104% in both arms. One LLM creature
 every ground. These are 9 creatures per arm, and the creatures of one run are not independent. Per creature:
 `runs/*/terrain.yaml`.
 
-Next, evolution on all four grounds: `jobs/sticks_terrain.yaml` and `sticks_terrain_llm.yaml` score each creature
-on the mean distance (`terrains:`, `fitness: {metric: terrain_mean}`) and, with `archive: {per_terrain: true}`,
-keep a specialist archive per ground beside the generalists, from the same simulations. Each creature costs four
-simulations, so a run takes about 4× as long.
+### Evolved on all four grounds: random, qwen, Claude Opus 5.5
+
+`jobs/sticks_terrain*.yaml` score each creature on its mean distance over flat, slope, ridges and sand
+(`terrains:`, `fitness: {metric: terrain_mean}`). With `archive: {per_terrain: true}` they also keep a specialist
+archive per ground beside the generalists, from the same simulations. Three arms, all seed 3 with the same
+starting creatures and about 630 creatures × 4 simulations each (2026-11-21 to 11-24, 20 threads):
+
+- **random:** random mutation and crossover only;
+- **+ qwen3.5:9b:** the local model writes half of the children, as above. The prompt says what the creatures
+  are scored on;
+- **+ Claude Opus 5.5:** the same prompt and rate, answered by Claude Opus 5.5 through headless Claude Code
+  (`tools/claude_bridge.py`: an ollama-compatible endpoint, no tools, no project files, Claude Code's own system
+  prompt replaced by ours). 298 answers, every one parsed, about 8 s each. Claude Code reported $8.18, the API
+  price of these calls; we ran them on a Pro plan.
+
+![QD-score per batch for the three arms: generalists and each ground's specialists](docs/media/terrain_qd.png)
+
+| | random | + qwen3.5:9b | + Claude Opus 5.5 |
+| --- | --- | --- | --- |
+| best generalist (mean of 4 grounds) | 383 mm | 502 mm | **701 mm** (693 mm passes the check) |
+| its flat / slope / ridges / sand | 637 / 342 / 419 / 135 | 682 / 560 / 530 / 234 | 910 / 670 / 770 / 455 |
+| best specialist: flat / slope / ridges / sand | 637 / 469 / 419 / 180 | 1020 / 672 / 531 / 432 | **1123 / 852 / 809 / 699** |
+| generalist archive: coverage, QD-score | **90%**, 3.2 | 87%, **5.3** | 80%, 4.1 |
+| specialist QD-score: flat / slope / ridges / sand | 5.5 / 2.9 / 3.5 / 2.6 | **10.1 / 5.8 / 4.7 / 5.2** | 7.5 / 3.9 / 4.3 / 4.4 |
+| LLM children into the archive | | 42 of 275 | 19 of 297 |
+| archive cells descended from an LLM child | | 21 of 26 | 7 of 24 |
+
+Both models beat random mutation everywhere. The two differ in a clear way:
+
+- **Opus finds the best creatures** on every ground: the best generalist (+40% over qwen) and the best specialist
+  of each ground, sand most of all (699 mm against 432 mm). All of them descend from its children.
+- **qwen fills the archive better.** It has the higher QD-score in all five archives, and its children and their
+  descendants hold 21 of 26 cells. Opus's hold 7 of 24.
+- Opus converges. Its "Idea:" lines keep returning to one design: a symmetric four-legged body with bending legs
+  ("so the body matches the 700 mm design", copying an example from the prompt). Those cells (3–4 limbs, compact)
+  reach 400–700 mm while the rest of the archive stays near random's. qwen's edits are less coherent but more
+  varied.
+
+**The exploit check is less kind to the Opus generalists.** Its #1 loses 30% with friction 0.8. #2 (693 mm) stays
+within 22% on every variant, but it loses about 22% on the finer mesh and on half the time step, so part of its
+lead may be numerical. The qwen #1 (502 mm) and the random #1 (383 mm) pass.
+
+One seed per arm, so this is a first look, not a result. The QD-score gap between qwen and Opus is about as large
+(about 25%) as the spread between the random seeds in the flat runs. The best-creature gap is larger.
+
+![The best generalist of each arm climbing the 8° slope](docs/media/terrain_3arms_slope.gif)
+
+*The best robust generalist of each arm, on the slope: random (383 mm mean over the four grounds), + qwen3.5:9b
+(502 mm), + Opus 5.5 #2 (693 mm).*
+
+![The same three creatures on the slope in 10× slow motion](docs/media/terrain_3arms_slope_slowmo.gif)
+
+*The same three on the slope, 0.4 s (1.5–1.9 s) in 10× slow motion: three different body plans and gaits.*
+
+![Opus 5.5 #2 on flat ground, slope, ridges and sand](docs/media/terrain_opus_grounds.gif)
+
+*One generalist, four grounds: Opus 5.5 #2 on flat ground, the slope, the ridges and the sand.*
+
+![The best sand specialist of each arm, on sand, in 10× slow motion](docs/media/terrain_sand_3arms_slowmo.gif)
+
+*The best sand specialist of each arm in 10× slow motion. Sand is where the arms differ most: random 180 mm,
+qwen3.5:9b 432 mm, Opus 5.5 699 mm.*
+
+![Opus 5.5's specialists, each on its own ground](docs/media/terrain_opus_specialists.gif)
+
+*The Opus 5.5 run's best specialist for each ground, found by the same simulations as the generalists: flat
+1123 mm, slope 852 mm uphill, ridges 809 mm, sand 699 mm. All four are variations of the same four-legged body,
+which is the convergence described above.*
+
+The GIFs are replays with each mesh rebuilt from the genome, because the runs' meshes stayed on the other PC. Flat
+runs reproduce, but a creature's path on ridges or the slope can differ from the run; the distances quoted are the
+runs'.
+
+To run the Opus arm: `python3 tools/claude_bridge.py --model opus --port 11500`, then
+`squishlings evolve jobs/sticks_terrain_claude.yaml --jobs 16`. The bridge waits out usage limits instead of
+failing, because `llm.py` falls back to random mutation on an error. It is a stand-in for the API (no seed, no
+temperature), so answers can't be reproduced, but every one is cached in `llm.jsonl`.
 
 ## Quick start
 
@@ -258,14 +352,16 @@ The design notes, the spike, and the problems found while building the soft stic
 | `squishlings/genome.py`, `build.py` | voxels: the encoding, its operators, genome ↔ softsim scenario |
 | `squishlings/locomotion.py` | the `locomotion` scenario (registered with softsim) |
 | `squishlings/replay.py` | GIF and HTML replays |
+| `tools/claude_bridge.py` | an ollama-compatible endpoint answered by headless Claude Code (the Opus arm) |
 | `squishlings/creatures/` | seeds and champions: voxels (`*.yaml`), soft sticks (`sticks/*.txt`) |
 | `jobs/` | `crawler*.yaml` (voxels), `sticks.yaml` ((μ+λ)), `sticks_map.yaml` (MAP-Elites), `sticks_map_llm.yaml` (MAP-Elites + LLM), `sticks_terrain*.yaml` (on all four grounds) |
 | `spikes/` | the soft-stick feasibility spike |
 
 ## Next
 
-- The terrain runs: generalists and per-ground specialists, random vs LLM.
-- Voxels × {random, LLM} for the full 2 × 2 comparison; a larger model as the operator.
+- The terrain runs on seeds 4 and 5, so random / qwen / Opus has three seeds per arm.
+- Keeping Opus from converging: ask it for a different body type than the examples, or show it empty cells.
+- Voxels × {random, LLM} for the full 2 × 2 comparison.
 - A lower frequency cap (about 6 Hz) to rule out buzzing gaits.
 - Neural controllers reading touch and strain sensors instead of open-loop oscillators (Framsticks' brains).
 - Turning muscle groups into buildable chambers and cables.
